@@ -96,3 +96,58 @@ export function Field({ label, children }) {
     </div>
   );
 }
+
+/* 年度 / 区间查询口径选择器
+ * value: { mode: "month"|"year"|"range", month, year, from, to }
+ */
+export function PeriodRange({ value, onChange, showMonth = true }) {
+  const set = (patch) => onChange({ ...value, ...patch });
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <select
+        className="input w-24"
+        value={value.mode}
+        onChange={(e) => set({ mode: e.target.value })}
+      >
+        {showMonth && <option value="month">按月</option>}
+        <option value="year">按年度</option>
+        <option value="range">按区间</option>
+      </select>
+      {value.mode === "month" && showMonth && (
+        <input
+          type="month"
+          className="input w-40"
+          value={value.month}
+          onChange={(e) => set({ month: e.target.value })}
+        />
+      )}
+      {value.mode === "year" && (
+        <input
+          type="number"
+          className="input w-28"
+          value={value.year}
+          min="1991"
+          max="2999"
+          onChange={(e) => set({ year: e.target.value })}
+        />
+      )}
+      {value.mode === "range" && (
+        <>
+          <input
+            type="month"
+            className="input w-36"
+            value={value.from}
+            onChange={(e) => set({ from: e.target.value })}
+          />
+          <span className="text-slate-400 text-sm">至</span>
+          <input
+            type="month"
+            className="input w-36"
+            value={value.to}
+            onChange={(e) => set({ to: e.target.value })}
+          />
+        </>
+      )}
+    </div>
+  );
+}

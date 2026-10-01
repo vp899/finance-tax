@@ -81,3 +81,36 @@ export function shiftPeriod(period, delta) {
   while (m < 1) { m += 12; y -= 1; }
   return `${y}-${String(m).padStart(2, "0")}`;
 }
+
+/* ---------- 年度 / 区间查询口径 ----------
+ * value: { mode: "month" | "year" | "range", month, year, from, to }
+ * rangeQuery(value) → 附加到 API 的查询参数字符串
+ */
+export function defaultRange() {
+  const now = new Date();
+  return {
+    mode: "month",
+    month: curPeriod(),
+    year: String(now.getFullYear()),
+    from: `${now.getFullYear()}-01`,
+    to: curPeriod(),
+  };
+}
+
+export function rangeQuery(value) {
+  if (value.mode === "year") return `year=${value.year}`;
+  if (value.mode === "range") return `from_period=${value.from}&to_period=${value.to}`;
+  return `period=${value.month}`;
+}
+
+export function rangeLabel(value) {
+  if (value.mode === "year") return `${value.year} 年度`;
+  if (value.mode === "range") return `${value.from} ~ ${value.to}`;
+  return value.month;
+}
+
+export function rangeFromTo(value) {
+  if (value.mode === "year") return { fp: `${value.year}-01`, tp: `${value.year}-12` };
+  if (value.mode === "range") return { fp: value.from, tp: value.to };
+  return { fp: value.month, tp: value.month };
+}

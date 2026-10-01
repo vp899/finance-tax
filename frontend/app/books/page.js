@@ -1,8 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { apiGet, curPeriod, downloadUrl, fmtMoney, shiftPeriod } from "@/lib/api";
-import { Alert, Empty, Money, Tabs } from "@/components/ui";
+import {
+  apiGet, curPeriod, defaultRange, downloadUrl, fmtMoney, rangeQuery,
+} from "@/lib/api";
+import { Alert, Badge, Empty, Money, PeriodRange, Tabs } from "@/components/ui";
 
 const TABS = [
   { key: "general", label: "总账" },
@@ -10,6 +12,7 @@ const TABS = [
   { key: "balance", label: "余额表" },
   { key: "journal", label: "序时账" },
   { key: "multi", label: "多栏账" },
+  { key: "trial", label: "试算平衡表" },
 ];
 
 export default function BooksPage() {
@@ -23,6 +26,7 @@ export default function BooksPage() {
       {tab === "detail" && <DetailLedger />}
       {tab === "journal" && <Journal />}
       {tab === "multi" && <MultiColumn />}
+      {tab === "trial" && <TrialBalance />}
     </div>
   );
 }
@@ -54,21 +58,21 @@ function AccountPicker({ value, onChange }) {
 }
 
 function GeneralLedger() {
-  const [period, setPeriod] = useState(curPeriod());
+  const [range, setRange] = useState(defaultRange());
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const load = useCallback(() => {
-    apiGet(`/api/books/general-ledger?period=${period}`).then(setData).catch((e) => setError(e.message));
-  }, [period]);
+    apiGet(`/api/books/general-ledger?${rangeQuery(range)}`).then(setData).catch((e) => setError(e.message));
+  }, [range]);
   useEffect(load, [load]);
 
   return (
     <div className="card">
       <Bar>
-        <input type="month" className="input w-44" value={period} onChange={(e) => setPeriod(e.target.value)} />
+        <PeriodRange value={range} onChange={setRange} />
         <button className="btn-ghost" onClick={load}>查询</button>
         <div className="flex-1" />
-        <a className="btn-ghost" href={downloadUrl(`/api/data/export/book/general-ledger?period=${period}`)}>
+        <a className="btn-ghost" href={downloadUrl(`/api/data/export/book/general-ledger?${rangeQuery(range)}`)}>
           导出 Excel
         </a>
       </Bar>
@@ -115,21 +119,21 @@ function GeneralLedger() {
 }
 
 function BalanceTable() {
-  const [period, setPeriod] = useState(curPeriod());
+  const [range, setRange] = useState(defaultRange());
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const load = useCallback(() => {
-    apiGet(`/api/books/balance-table?period=${period}`).then(setData).catch((e) => setError(e.message));
-  }, [period]);
+    apiGet(`/api/books/balance-table?${rangeQuery(range)}`).then(setData).catch((e) => setError(e.message));
+  }, [range]);
   useEffect(load, [load]);
 
   return (
     <div className="card">
       <Bar>
-        <input type="month" className="input w-44" value={period} onChange={(e) => setPeriod(e.target.value)} />
+        <PeriodRange value={range} onChange={setRange} />
         <button className="btn-ghost" onClick={load}>查询</button>
         <div className="flex-1" />
-        <a className="btn-ghost" href={downloadUrl(`/api/data/export/book/balance-table?period=${period}`)}>
+        <a className="btn-ghost" href={downloadUrl(`/api/data/export/book/balance-table?${rangeQuery(range)}`)}>
           导出 Excel
         </a>
       </Bar>
@@ -312,6 +316,81 @@ function Journal() {
                 <td className="td-num">{fmtMoney(data.total_debit)}</td>
                 <td className="td-num">{fmtMoney(data.total_credit)}</td>
                 <td className="td"></td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+        {!data?.rows?.length && <Empty />}
+      </div>
+    </div>
+  );
+}
+
+function TrialBalance() {
+  const [range, setRange] = useState(defaultRange());
+  const [data, setData] = useState(null);
+  const [error, setError] = useState("");
+  const load = useCallback(() => {
+    apiGet(`/api/books/trial-balance?${rangeQuery(range)}`).then(setData).catch((e) => setError(e.message));
+  }, [range]);
+  useEffect(load, [load]);
+
+  return (
+    <div className="card">
+      <Bar>
+        <PeriodRange value={range} onChange={setRange} />
+        <button className="btn-ghost" onClick={load}>查询</button>
+        {data && (
+          data.balanced ? (
+            <Badge color="green">试算平衡</Badge>
+          ) : (
+            <Badge color="red">试算不平衡 差额 {fmtMoney(data.difference)}</Badge>
+          )
+        )}
+        <div className="flex-1" />
+        <a className="btn-ghost" href={downloadUrl(`/api/data/export/book/trial-balance?${rangeQuery(range)}`)}>
+          导出 Excel
+        </a>
+      </Bar>
+      {error && <div className="p-4"><Alert onClose={() => setError("")}>{error}</Alert></div>}
+      <div className="overflow-x-auto max-h-[70vh] overflow-y-auto">
+        <table className="w-full">
+          <thead className="sticky top-0">
+            <tr>
+              <th className="th">科目</th>
+              <th className="th text-right">期初借方</th>
+              <th className="th text-right">期初贷方</th>
+              <th className="th text-right">本期借方</th>
+              <th className="th text-right">本期贷方</th>
+              <th className="th text-right">期末借方</th>
+              <th className="th text-right">期末贷方</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data?.rows?.map((r) => (
+              <tr key={r.code} className="hover:bg-slate-50">
+                <td className="td">
+                  <span className={r.is_leaf === false ? "text-amber-600" : ""}>
+                    {r.code} {r.name}{r.is_leaf === false ? "（非末级·直接记账）" : ""}
+                  </span>
+                </td>
+                <td className="td-num"><Money v={r.opening_debit} dim /></td>
+                <td className="td-num"><Money v={r.opening_credit} dim /></td>
+                <td className="td-num"><Money v={r.period_debit} dim /></td>
+                <td className="td-num"><Money v={r.period_credit} dim /></td>
+                <td className="td-num"><Money v={r.debit} dim /></td>
+                <td className="td-num"><Money v={r.credit} dim /></td>
+              </tr>
+            ))}
+            {data && (
+              <tr className="bg-slate-50 font-semibold">
+                <td className="td">合计</td>
+                <td className="td"></td>
+                <td className="td"></td>
+                <td className="td"></td>
+                <td className="td"></td>
+                <td className="td-num">{fmtMoney(data.total_debit)}</td>
+                <td className="td-num">{fmtMoney(data.total_credit)}</td>
               </tr>
             )}
           </tbody>

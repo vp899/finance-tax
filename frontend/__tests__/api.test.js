@@ -8,8 +8,12 @@ import {
   apiUpload,
   apiUrl,
   curPeriod,
+  defaultRange,
   downloadUrl,
   fmtMoney,
+  rangeFromTo,
+  rangeLabel,
+  rangeQuery,
   shiftPeriod,
 } from "@/lib/api";
 
@@ -129,5 +133,36 @@ describe("apiGet / apiPost / apiPut", () => {
       json: async () => ({ detail: "导入失败" }),
     });
     await expect(apiUpload("/x", new File(["x"], "a.xlsx"))).rejects.toThrow("导入失败");
+  });
+});
+
+describe("年度 / 区间查询口径", () => {
+  test("defaultRange 默认按当月", () => {
+    const r = defaultRange();
+    expect(r.mode).toBe("month");
+    expect(r.month).toBe(curPeriod());
+    expect(r.year).toBe(curPeriod().slice(0, 4));
+    expect(r.from).toBe(`${curPeriod().slice(0, 4)}-01`);
+    expect(r.to).toBe(curPeriod());
+  });
+
+  test("rangeQuery 三种口径", () => {
+    expect(rangeQuery({ mode: "month", month: "2026-05" })).toBe("period=2026-05");
+    expect(rangeQuery({ mode: "year", year: "2026" })).toBe("year=2026");
+    expect(rangeQuery({ mode: "range", from: "2025-11", to: "2026-04" }))
+      .toBe("from_period=2025-11&to_period=2026-04");
+  });
+
+  test("rangeFromTo 区间推导", () => {
+    expect(rangeFromTo({ mode: "month", month: "2026-05" })).toEqual({ fp: "2026-05", tp: "2026-05" });
+    expect(rangeFromTo({ mode: "year", year: "2026" })).toEqual({ fp: "2026-01", tp: "2026-12" });
+    expect(rangeFromTo({ mode: "range", from: "2025-11", to: "2026-04" }))
+      .toEqual({ fp: "2025-11", tp: "2026-04" });
+  });
+
+  test("rangeLabel 展示", () => {
+    expect(rangeLabel({ mode: "year", year: "2026" })).toBe("2026 年度");
+    expect(rangeLabel({ mode: "range", from: "2025-11", to: "2026-04" })).toBe("2025-11 ~ 2026-04");
+    expect(rangeLabel({ mode: "month", month: "2026-05" })).toBe("2026-05");
   });
 });

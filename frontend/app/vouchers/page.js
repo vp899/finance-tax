@@ -1,8 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { apiGet, apiPost, curPeriod, downloadUrl, fmtMoney, shiftPeriod } from "@/lib/api";
-import { Alert, Badge, Empty, Modal, Tabs } from "@/components/ui";
+import {
+  apiGet, apiPost, apiDel, curPeriod, defaultRange, downloadUrl, fmtMoney,
+  rangeFromTo, rangeQuery,
+} from "@/lib/api";
+import { Alert, Badge, Empty, Modal, PeriodRange, Tabs } from "@/components/ui";
 import VoucherEditor from "@/components/VoucherEditor";
 
 const STATUS = {
@@ -30,31 +33,28 @@ export default function VouchersPage() {
 }
 
 function VoucherSummary() {
-  const [period, setPeriod] = useState(curPeriod());
+  const [range, setRange] = useState(defaultRange());
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
 
   const load = useCallback(() => {
     setError("");
-    apiGet(`/api/vouchers/summary?from_period=${period}&to_period=${period}`)
+    const { fp, tp } = rangeFromTo(range);
+    apiGet(`/api/vouchers/summary?from_period=${fp}&to_period=${tp}`)
       .then(setData)
       .catch((e) => setError(e.message));
-  }, [period]);
+  }, [range]);
 
   useEffect(load, [load]);
+  const { fp, tp } = rangeFromTo(range);
 
   return (
     <div className="card">
-      <div className="flex items-center gap-3 p-4 border-b border-slate-200">
-        <input
-          type="month"
-          className="input w-44"
-          value={period}
-          onChange={(e) => setPeriod(e.target.value)}
-        />
+      <div className="flex flex-wrap items-center gap-3 p-4 border-b border-slate-200">
+        <PeriodRange value={range} onChange={setRange} />
         <button className="btn-ghost" onClick={load}>查询</button>
         <div className="flex-1" />
-        <a className="btn-ghost" href={downloadUrl(`/api/reports/export/voucher-summary?period=${period}`)}>
+        <a className="btn-ghost" href={downloadUrl(`/api/reports/export/voucher-summary?from_period=${fp}&to_period=${tp}`)}>
           导出 Excel
         </a>
       </div>
@@ -98,7 +98,7 @@ function VoucherSummary() {
 }
 
 function VoucherList() {
-  const [period, setPeriod] = useState(curPeriod());
+  const [range, setRange] = useState(defaultRange());
   const [status, setStatus] = useState("");
   const [q, setQ] = useState("");
   const [page, setPage] = useState(1);
@@ -108,13 +108,19 @@ function VoucherList() {
   const [view, setView] = useState(null);
 
   const load = useCallback(() => {
-    const params = new URLSearchParams({ period, page: String(page), size: "20" });
+    const params = new URLSearchParams({ page: String(page), size: "20" });
+    if (range.mode === "month") params.set("period", range.month);
+    else if (range.mode === "year") params.set("year", range.year);
+    else {
+      params.set("from_period", range.from);
+      params.set("to_period", range.to);
+    }
     if (status) params.set("status", status);
     if (q) params.set("q", q);
     apiGet(`/api/vouchers?${params}`)
       .then(setData)
       .catch((e) => setError(e.message));
-  }, [period, status, q, page]);
+  }, [range, status, q, page]);
 
   useEffect(load, [load]);
 
@@ -137,20 +143,25 @@ function VoucherList() {
     }
   };
 
+  const deleteVoucher = async (v) => {
+    if (!confirm(`确认删除凭证 ${v.voucher_no}？删除后不可恢复（建议优先使用【作废】保留痕迹）。`)) return;
+    try {
+      const r = await apiDel(`/api/vouchers/${v.id}`);
+      if (r.carryover_records_removed) {
+        setError("");
+      }
+      load();
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
   return (
     <div className="space-y-4">
       {error && <Alert onClose={() => setError("")}>{error}</Alert>}
       <div className="card">
         <div className="flex flex-wrap items-center gap-3 p-4 border-b border-slate-200">
-          <input
-            type="month"
-            className="input w-44"
-            value={period}
-            onChange={(e) => {
-              setPeriod(e.target.value);
-              setPage(1);
-            }}
-          />
+          <PeriodRange value={range} onChange={(v) => { setRange(v); setPage(1); }} />
           <select
             className="input w-36"
             value={status}
@@ -177,7 +188,7 @@ function VoucherList() {
           <div className="flex-1" />
           <a
             className="btn-ghost"
-            href={downloadUrl(`/api/data/export/vouchers?from_period=${period}&to_period=${period}`)}
+            href={downloadUrl(`/api/data/export/vouchers?from_period=${rangeFromTo(range).fp}&to_period=${rangeFromTo(range).tp}`)}
           >
             导出 Excel
           </a>
@@ -233,6 +244,12 @@ function VoucherList() {
                       onClick={() => voidVoucher(v)}
                     >
                       {v.status === "voided" ? "恢复" : "作废"}
+                    </button>
+                    <button
+                      className="text-rose-600 text-xs hover:underline ml-2"
+                      onClick={() => deleteVoucher(v)}
+                    >
+                      删除
                     </button>
                   </td>
                 </tr>

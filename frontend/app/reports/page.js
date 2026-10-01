@@ -1,8 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { apiGet, curPeriod, downloadUrl, fmtMoney, shiftPeriod } from "@/lib/api";
-import { Alert, Badge, Empty, Money, Tabs } from "@/components/ui";
+import {
+  apiGet, curPeriod, defaultRange, downloadUrl, fmtMoney, rangeFromTo,
+} from "@/lib/api";
+import { Alert, Badge, Empty, Money, PeriodRange, Tabs } from "@/components/ui";
 
 const TABS = [
   { key: "bs", label: "资产负债表" },
@@ -35,21 +37,23 @@ function Bar({ children }) {
 }
 
 function BalanceSheet() {
-  const [period, setPeriod] = useState(curPeriod());
+  const [range, setRange] = useState(defaultRange());
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
+  const { fp, tp } = rangeFromTo(range);
   const load = useCallback(() => {
     setError("");
-    apiGet(`/api/reports/balance-sheet?period=${period}`)
+    const q = range.mode === "year" ? `year=${range.year}` : `period=${tp}`;
+    apiGet(`/api/reports/balance-sheet?${q}`)
       .then(setData)
       .catch((e) => setError(e.message));
-  }, [period]);
+  }, [range]);
   useEffect(load, [load]);
 
   return (
     <div className="card">
       <Bar>
-        <input type="month" className="input w-44" value={period} onChange={(e) => setPeriod(e.target.value)} />
+        <PeriodRange value={range} onChange={setRange} />
         <button className="btn-ghost" onClick={load}>生成报表</button>
         {data && (
           <Badge color={data.balanced ? "green" : "red"}>
@@ -57,7 +61,7 @@ function BalanceSheet() {
           </Badge>
         )}
         <div className="flex-1" />
-        <a className="btn-ghost" href={downloadUrl(`/api/reports/export/balance-sheet?period=${period}`)}>
+        <a className="btn-ghost" href={downloadUrl(`/api/reports/export/balance-sheet?period=${tp}`)}>
           导出 Excel
         </a>
       </Bar>
@@ -114,24 +118,31 @@ function BSRows({ data }) {
 }
 
 function Income({ mode, title }) {
-  const [period, setPeriod] = useState(curPeriod());
+  const [range, setRange] = useState(defaultRange());
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
+  const { fp, tp } = rangeFromTo(range);
+  const effMode = range.mode === "month" ? mode : "range";
   const load = useCallback(() => {
     setError("");
-    apiGet(`/api/reports/income?period=${period}&mode=${mode}`)
+    const q = range.mode === "month"
+      ? `period=${range.month}&mode=${mode}`
+      : range.mode === "year"
+        ? `year=${range.year}`
+        : `from_period=${range.from}&to_period=${range.to}`;
+    apiGet(`/api/reports/income?${q}`)
       .then(setData)
       .catch((e) => setError(e.message));
-  }, [period, mode]);
+  }, [range, mode]);
   useEffect(load, [load]);
 
   return (
     <div className="card">
       <Bar>
-        <input type="month" className="input w-44" value={period} onChange={(e) => setPeriod(e.target.value)} />
+        <PeriodRange value={range} onChange={setRange} />
         <button className="btn-ghost" onClick={load}>生成报表</button>
         <div className="flex-1" />
-        <a className="btn-ghost" href={downloadUrl(`/api/reports/export/income?period=${period}&mode=${mode}`)}>
+        <a className="btn-ghost" href={downloadUrl(`/api/reports/export/income?period=${tp}&mode=${effMode}`)}>
           导出 Excel
         </a>
       </Bar>
@@ -141,7 +152,9 @@ function Income({ mode, title }) {
           <thead>
             <tr>
               <th className="th">项目</th>
-              <th className="th text-right">{mode === "quarter" ? "本季金额" : "本月金额"}</th>
+              <th className="th text-right">
+                {effMode === "range" ? "区间金额" : mode === "quarter" ? "本季金额" : "本月金额"}
+              </th>
               <th className="th text-right">本年累计金额</th>
             </tr>
           </thead>
@@ -162,33 +175,36 @@ function Income({ mode, title }) {
 }
 
 function Cashflow({ quarter }) {
-  const [period, setPeriod] = useState(curPeriod());
+  const [range, setRange] = useState(defaultRange());
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
 
-  const range = useCallback(() => {
+  const bounds = useCallback(() => {
+    if (range.mode === "year") return { from: `${range.year}-01`, to: `${range.year}-12` };
+    if (range.mode === "range") return { from: range.from, to: range.to };
+    const period = range.month;
     const y = period.slice(0, 4);
     if (quarter) {
       const q = Math.floor((Number(period.slice(5, 7)) - 1) / 3);
       return { from: `${y}-${String(q * 3 + 1).padStart(2, "0")}`, to: period };
     }
     return { from: `${y}-01`, to: period };
-  }, [period, quarter]);
+  }, [range, quarter]);
 
   const load = useCallback(() => {
     setError("");
-    const { from, to } = range();
+    const { from, to } = bounds();
     apiGet(`/api/reports/cashflow?from_period=${from}&to_period=${to}`)
       .then(setData)
       .catch((e) => setError(e.message));
-  }, [range]);
+  }, [bounds]);
   useEffect(load, [load]);
 
-  const { from, to } = range();
+  const { from, to } = bounds();
   return (
     <div className="card">
       <Bar>
-        <input type="month" className="input w-44" value={period} onChange={(e) => setPeriod(e.target.value)} />
+        <PeriodRange value={range} onChange={setRange} />
         <button className="btn-ghost" onClick={load}>生成报表</button>
         <span className="text-xs text-slate-400">区间 {from} 至 {to}</span>
         {data && (

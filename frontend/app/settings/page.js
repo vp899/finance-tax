@@ -280,6 +280,7 @@ function Opening() {
         <input className="input w-32" value={year} onChange={(e) => setYear(e.target.value)} />
         <span className="text-sm text-slate-500">年度期初余额（借方合计 {fmtMoney(totalD)} / 贷方合计 {fmtMoney(totalC)}）</span>
         {balanced ? <Badge color="green">试算平衡</Badge> : <Badge color="red">不平衡</Badge>}
+        <span className="text-xs text-slate-400">可直接修改已有期初；保存时按全年合并口径校验试算平衡</span>
         <div className="flex-1" />
         <button
           className="btn-primary"
@@ -317,7 +318,10 @@ function Opening() {
               const e = edits[r.account_id] || {};
               return (
                 <tr key={r.account_id} className="hover:bg-slate-50">
-                  <td className="td">{r.code} {r.name}</td>
+                  <td className="td">
+                    {r.code} {r.name}
+                    {r.is_leaf === false && <Badge color="amber">非末级</Badge>}
+                  </td>
                   <td className="td p-1">
                     <input
                       className="input text-right tabular-nums"

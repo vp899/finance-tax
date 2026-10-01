@@ -128,33 +128,66 @@ describe("仪表盘页面", () => {
 
 const RECORDS = [
   {
-    id: 1, kind: "depreciation", period: "2026-10", amount: 950,
+    id: 1, kind: "depreciation", kind_name: "计提折旧", period: "2026-10", amount: 950,
     status: "active", created_at: "2026-10-01 10:00:00", note: "计提折旧",
     voucher_id: 11, voucher_no: "转-202610-001",
   },
   {
-    id: 2, kind: "sales_cost", period: "2026-10", amount: 50000,
+    id: 2, kind: "sales_cost", kind_name: "结转销售成本", period: "2026-10", amount: 50000,
     status: "reversed", created_at: "2026-10-01 10:01:00", note: "",
     voucher_id: 12, voucher_no: "转-202610-002",
   },
 ];
 
+const KINDS = [
+  ["sales_cost", "结转销售成本", 10, "借：主营业务成本　贷：库存商品", "manual", true],
+  ["salary", "计提工资", 20, "借：管理费用-工资　贷：应付职工薪酬", "manual", true],
+  ["pay_salary", "发放工资", 25, "借：应付职工薪酬　贷：银行存款", "auto", true],
+  ["pay_bonus", "发放全年一次性奖金", 30, "借：应付职工薪酬　贷：银行存款", "manual", true],
+  ["depreciation", "计提折旧", 40, "借：管理费用-折旧费　贷：累计折旧", "auto", false],
+  ["amortization", "摊销无形资产", 50, "借：管理费用-摊销费　贷：累计摊销", "auto", false],
+  ["amortize_deferred", "摊销待摊费用", 60, "借：管理费用-摊销费　贷：长期待摊费用", "manual", true],
+  ["vat_free", "免交增值税", 70, "借：应交增值税　贷：营业外收入", "auto", true],
+  ["accrue_bonus", "计提全年一次性奖金", 80, "借：管理费用-工资　贷：应付职工薪酬", "manual", true],
+  ["accrue_labor", "计提劳务报酬", 90, "借：管理费用-劳务费　贷：其他应付款", "manual", true],
+  ["pay_labor", "发放劳务报酬", 100, "借：其他应付款　贷：银行存款", "auto", true],
+  ["tax", "计提税金", 110, "借：税金及附加　贷：应交税费", "auto", true],
+  ["water_fund", "地方水利基金", 120, "借：税金及附加　贷：应交水利基金", "auto", true],
+  ["stamp_tax", "印花税", 130, "借：税金及附加　贷：应交印花税", "manual", true],
+  ["union_fee", "工会经费", 140, "借：管理费用　贷：应付职工薪酬", "auto", true],
+  ["income_tax", "计提所得税", 150, "借：所得税费用　贷：应交所得税", "auto", true],
+  ["exchange", "结转汇兑损益", 160, "借/贷：外币科目　贷/借：汇兑损益", "auto", false],
+  ["profit", "结转本期损益", 170, "损益类科目余额转入本年利润", "auto", false],
+  ["retain_profit", "结转未分配利润", 180, "借：本年利润　贷：利润分配", "auto", false],
+].map(([kind, name, order, desc, amount_mode, manual_amount]) => ({
+  kind, name, order, desc, amount_mode, manual_amount,
+  enabled: true, default_amount: 0,
+  accounts: { expense: "5401", credit: "1405" },
+}));
+
 describe("结转与结账页面", () => {
-  test("展示 8 项结转操作", async () => {
-    mockRoutes({ "/api/carryover/records": RECORDS, "/api/carryover/periods": [] });
+  test("展示全部结转步骤（含一键结转/结转配置入口）", async () => {
+    mockRoutes({
+      "/api/carryover/records": RECORDS,
+      "/api/carryover/periods": [],
+      "/api/carryover/kinds": KINDS,
+    });
     render(<CarryoverPage />);
     await waitFor(() => expect(screen.getAllByText("结转销售成本").length).toBeGreaterThan(0));
-    expect(screen.getAllByText("计提工资").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("计提折旧").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("摊销无形资产").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("结转本期损益").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("计提税金").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("计提所得税").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("免交增值税").length).toBeGreaterThan(0);
+    for (const name of ["计提工资", "发放工资", "计提折旧", "摊销无形资产", "免交增值税",
+                        "结转汇兑损益", "结转本期损益", "结转未分配利润"]) {
+      expect(screen.getAllByText(name).length).toBeGreaterThan(0);
+    }
+    expect(screen.getByText("⚡ 一键结转")).toBeInTheDocument();
+    expect(screen.getByText("结转配置")).toBeInTheDocument();
   });
 
   test("结转记录列表与状态", async () => {
-    mockRoutes({ "/api/carryover/records": RECORDS, "/api/carryover/periods": [] });
+    mockRoutes({
+      "/api/carryover/records": RECORDS,
+      "/api/carryover/periods": [],
+      "/api/carryover/kinds": KINDS,
+    });
     render(<CarryoverPage />);
     await waitFor(() => expect(screen.getByText("转-202610-001")).toBeInTheDocument());
     expect(screen.getByText("有效")).toBeInTheDocument();
@@ -165,15 +198,14 @@ describe("结转与结账页面", () => {
     mockRoutes({
       "/api/carryover/records": RECORDS,
       "/api/carryover/periods": [],
+      "/api/carryover/kinds": KINDS,
       "/api/carryover/preview/depreciation": {
         items: [{ id: 1, name: "设备A", amount: 950 }], total: 950,
       },
     });
     render(<CarryoverPage />);
-    fireEvent.click(await screen.findByText("计提折旧"));
-    await waitFor(() =>
-      expect(screen.getByText("本月折旧合计")).toBeInTheDocument()
-    );
+    fireEvent.click((await screen.findAllByText("计提折旧"))[0]);
+    await waitFor(() => expect(screen.getByText("设备A")).toBeInTheDocument());
     expect(screen.getAllByText("950.00").length).toBeGreaterThan(0);
   });
 
@@ -181,6 +213,7 @@ describe("结转与结账页面", () => {
     mockRoutes({
       "/api/carryover/records": RECORDS,
       "/api/carryover/periods": [],
+      "/api/carryover/kinds": KINDS,
       "/api/carryover/preview/depreciation": {
         items: [{ id: 1, name: "设备A", amount: 950 }], total: 950,
       },
@@ -189,7 +222,7 @@ describe("结转与结账页面", () => {
       },
     });
     render(<CarryoverPage />);
-    fireEvent.click(await screen.findByText("计提折旧"));
+    fireEvent.click((await screen.findAllByText("计提折旧"))[0]);
     fireEvent.click(await screen.findByText("确认计提折旧"));
     await waitFor(() =>
       expect(screen.getByText(/计提折旧完成/)).toBeInTheDocument()
@@ -200,19 +233,75 @@ describe("结转与结账页面", () => {
     global.fetch = jest.fn((url) => {
       const u = String(url);
       if (u.includes("/preview/depreciation"))
-        return Promise.resolve(okJson({ items: [], total: 0 }));
+        return Promise.resolve(okJson({ items: [], total: 0, skip: "尚未录入固定资产" }));
       if (u.includes("/api/carryover/depreciation"))
         return Promise.resolve({
           ok: false, status: 400,
           json: async () => ({ detail: "尚未录入固定资产" }),
         });
+      if (u.includes("/api/carryover/kinds")) return Promise.resolve(okJson(KINDS));
       return Promise.resolve(okJson(u.includes("periods") ? [] : RECORDS));
     });
     render(<CarryoverPage />);
-    fireEvent.click(await screen.findByText("计提折旧"));
+    fireEvent.click((await screen.findAllByText("计提折旧"))[0]);
     fireEvent.click(await screen.findByText("确认计提折旧"));
     await waitFor(() =>
       expect(screen.getByText("尚未录入固定资产")).toBeInTheDocument()
     );
+  });
+
+  test("一键结转弹窗展示步骤并执行", async () => {
+    global.fetch = jest.fn((url) => {
+      const u = String(url);
+      if (u.includes("/api/carryover/kinds")) return Promise.resolve(okJson(KINDS));
+      if (u.includes("/preview/")) return Promise.resolve(okJson({ amount: 0, skip: "金额为 0" }));
+      if (u.includes("/api/carryover/run-all"))
+        return Promise.resolve(okJson({
+          period: "2026-10", created_count: 1, total_amount: 950,
+          results: [
+            { kind: "depreciation", name: "计提折旧", status: "created", amount: 950, voucher_no: "转-202610-009", message: "" },
+            { kind: "salary", name: "计提工资", status: "skipped", amount: 0, message: "计提金额为 0" },
+          ],
+        }));
+      return Promise.resolve(okJson(u.includes("periods") ? [] : RECORDS));
+    });
+    render(<CarryoverPage />);
+    fireEvent.click(await screen.findByText("⚡ 一键结转"));
+    await waitFor(() => expect(screen.getByText(/执行一键结转/)).toBeInTheDocument());
+    fireEvent.click(screen.getByText("执行一键结转"));
+    await waitFor(() => expect(screen.getByText("转-202610-009")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("完成"));
+    await waitFor(() => expect(screen.getByText(/一键结转完成/)).toBeInTheDocument());
+  });
+
+  test("结转配置可修改并保存", async () => {
+    const cfg = {
+      steps: {
+        sales_cost: {
+          enabled: true, order: 10, amount_mode: "manual", default_amount: 0,
+          accounts: { expense: "5401", credit: "1405" },
+        },
+      },
+      rates: { city: 0.07, edu: 0.03 },
+    };
+    const putBodies = [];
+    global.fetch = jest.fn((url, opts) => {
+      const u = String(url);
+      if (u.endsWith("/api/carryover/config") && (!opts || !opts.method || opts.method === "GET"))
+        return Promise.resolve(okJson(cfg));
+      if (u.endsWith("/api/carryover/config") && opts && opts.method === "PUT") {
+        putBodies.push(JSON.parse(opts.body));
+        return Promise.resolve(okJson(cfg));
+      }
+      if (u.includes("/api/carryover/kinds")) return Promise.resolve(okJson(KINDS));
+      return Promise.resolve(okJson(u.includes("periods") ? [] : RECORDS));
+    });
+    render(<CarryoverPage />);
+    fireEvent.click(await screen.findByText("结转配置"));
+    await waitFor(() => expect(screen.getByText("税率 / 费率")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("保存配置"));
+    await waitFor(() => expect(screen.getByText("结转配置已保存")).toBeInTheDocument());
+    expect(putBodies.length).toBe(1);
+    expect(putBodies[0].steps.sales_cost.accounts.expense).toBe("5401");
   });
 });
