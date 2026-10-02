@@ -11,23 +11,41 @@ router = APIRouter(prefix="/api/reports", tags=["reports"])
 
 
 @router.get("/balance-sheet")
-def balance_sheet(period: str, db: Session = Depends(get_db)):
-    if not L.valid_period(period):
+def balance_sheet(period: str = None, year: str = None, db: Session = Depends(get_db)):
+    if year and not period:
+        period = f"{year}-12"
+    if not L.valid_period(period or ""):
         raise HTTPException(400, "期间格式应为 YYYY-MM")
     return L.balance_sheet(db, period)
 
 
 @router.get("/income")
-def income(period: str, mode: str = "month", db: Session = Depends(get_db)):
-    """mode=month 利润表；mode=quarter 利润表季报"""
-    if not L.valid_period(period):
+def income(period: str = None, mode: str = "month", year: str = None,
+           from_period: str = None, to_period: str = None,
+           db: Session = Depends(get_db)):
+    """mode=month 利润表；mode=quarter 利润表季报；mode=range 区间合计
+    （也可用 year=YYYY 或 from_period/to_period 指定区间）"""
+    if year and not period:
+        period = f"{year}-12"
+        from_period, to_period = f"{year}-01", f"{year}-12"
+        mode = "range"
+    elif from_period and to_period and not period:
+        period = to_period
+        mode = "range"
+    if not L.valid_period(period or ""):
         raise HTTPException(400, "期间格式应为 YYYY-MM")
-    return L.income_statement(db, period, mode)
+    return L.income_statement(db, period, mode, from_period=from_period,
+                              to_period=to_period)
 
 
 @router.get("/cashflow")
-def cashflow(from_period: str, to_period: str, db: Session = Depends(get_db)):
-    if not (L.valid_period(from_period) and L.valid_period(to_period)):
+def cashflow(from_period: str = None, to_period: str = None, year: str = None,
+             period: str = None, db: Session = Depends(get_db)):
+    if year and not from_period:
+        from_period, to_period = f"{year}-01", f"{year}-12"
+    if period and not from_period:
+        from_period, to_period = f"{period[:4]}-01", period
+    if not (L.valid_period(from_period or "") and L.valid_period(to_period or "")):
         raise HTTPException(400, "期间格式应为 YYYY-MM")
     return L.cashflow_statement(db, from_period, to_period)
 

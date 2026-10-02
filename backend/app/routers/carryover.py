@@ -9,24 +9,53 @@ from ..services import carryover as C
 router = APIRouter(prefix="/api/carryover", tags=["carryover"])
 
 
+@router.get("/kinds")
+def kinds(db: Session = Depends(get_db)):
+    """全部结转步骤定义（名称/顺序/分录说明/金额来源）"""
+    return [{**C.STEP_META[k], "order": v["order"], "enabled": v["enabled"],
+             "amount_mode": v["amount_mode"], "default_amount": v["default_amount"],
+             "accounts": v["accounts"]}
+            for k, v in sorted(C.get_config(db)["steps"].items(),
+                               key=lambda kv: (kv[1]["order"], kv[0]))]
+
+
+@router.get("/config")
+def get_config(db: Session = Depends(get_db)):
+    return C.get_config(db)
+
+
+@router.put("/config")
+def put_config(body: dict, db: Session = Depends(get_db)):
+    try:
+        cfg = C.save_config(db, body)
+        db.commit()
+        return cfg
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(400, str(e))
+
+
 @router.get("/preview/{kind}")
-def preview(kind: str, period: str, db: Session = Depends(get_db)):
+def preview(kind: str, period: str, withheld: float = None, vat_base: float = None,
+            db: Session = Depends(get_db)):
     if not L.valid_period(period):
         raise HTTPException(400, "期间格式应为 YYYY-MM")
     kind = kind.replace("-", "_")
-    fn = {
-        "sales_cost": C.preview_sales_cost, "salary": C.preview_salary,
-        "depreciation": C.preview_depreciation, "amortization": C.preview_amortization,
-        "profit": C.preview_profit, "tax": C.preview_tax,
-        "income_tax": C.preview_income_tax, "vat_free": C.preview_vat_free,
-    }.get(kind)
-    if not fn:
+    if kind not in C.PLANNERS:
         raise HTTPException(404, f"未知结转类型：{kind}")
-    return fn(db, period)
+    extra = {}
+    if withheld is not None:
+        extra["withheld"] = withheld
+    if vat_base is not None:
+        extra["vat_base"] = vat_base
+    return C.preview(kind, db, period, extra=extra)
+
 
 @router.get("/records")
-def records(period: str = None, db: Session = Depends(get_db)):
-    return C.list_records(db, period)
+def records(period: str = None, year: str = None, from_period: str = None,
+            to_period: str = None, db: Session = Depends(get_db)):
+    return C.list_records(db, period=period, year=year,
+                          from_period=from_period, to_period=to_period)
 
 
 @router.post("/reverse/{record_id}")
@@ -173,36 +202,41 @@ def delete_intangible(asset_id: int, db: Session = Depends(get_db)):
 
 # ---------- 结转执行（通配路由，必须定义在 /close、/open 等具体路由之后） ----------
 
+@router.post("/run-all")
+def run_all(body: dict, db: Session = Depends(get_db)):
+    """一键结转：按配置顺序执行结转步骤，返回每步结果"""
+    period = str(body.get("period") or "")
+    if not L.valid_period(period):
+        raise HTTPException(400, "期间格式应为 YYYY-MM")
+    try:
+        res = C.run_all(db, period, kinds=body.get("kinds"),
+                        amounts=body.get("amounts") or {},
+                        stop_on_error=bool(body.get("stop_on_error")))
+        db.commit()
+        return res
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(400, str(e))
+
+
 @router.post("/{kind}")
 def execute(kind: str, body: dict, db: Session = Depends(get_db)):
     period = str(body.get("period") or "")
     if not L.valid_period(period):
         raise HTTPException(400, "期间格式应为 YYYY-MM")
     kind = kind.replace("-", "_")
+    if kind not in C.PLANNERS:
+        raise HTTPException(404, f"未知结转类型：{kind}")
     try:
-        if kind == "sales_cost":
-            res = C.do_sales_cost(db, period, float(body.get("amount") or 0),
-                                  body.get("summary") or "结转本月销售成本")
-        elif kind == "salary":
-            res = C.do_salary(db, period, float(body.get("amount") or 0),
-                              body.get("expense_code"), body.get("summary") or "计提本月职工工资")
-        elif kind == "depreciation":
-            res = C.do_depreciation(db, period)
-        elif kind == "amortization":
-            res = C.do_amortization(db, period)
-        elif kind == "profit":
-            res = C.do_profit(db, period)
-        elif kind == "tax":
-            base = body.get("vat_base")
-            res = C.do_tax(db, period, float(base) if base is not None else None)
-        elif kind == "income_tax":
-            amt = body.get("amount")
-            res = C.do_income_tax(db, period, float(amt) if amt is not None else None)
-        elif kind == "vat_free":
-            amt = body.get("amount")
-            res = C.do_vat_free(db, period, float(amt) if amt is not None else None)
-        else:
-            raise HTTPException(404, f"未知结转类型：{kind}")
+        amount = body.get("amount")
+        extra = {}
+        if body.get("withheld") is not None:
+            extra["withheld"] = body.get("withheld")
+        if body.get("vat_base") is not None:
+            extra["vat_base"] = body.get("vat_base")
+        res = C.execute(kind, db, period,
+                        amount=float(amount) if amount not in (None, "") else None,
+                        extra=extra, summary=body.get("summary") or None)
         db.commit()
         return res
     except ValueError as e:

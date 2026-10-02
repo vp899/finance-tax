@@ -36,11 +36,20 @@ def _v2d(v: Voucher, with_entries=True):
 
 
 @router.get("")
-def list_vouchers(period: str = None, status: str = None, q: str = "",
+def list_vouchers(period: str = None, year: str = None, from_period: str = None,
+                  to_period: str = None, status: str = None, q: str = "",
                   page: int = 1, size: int = 20, db: Session = Depends(get_db)):
     query = db.query(Voucher)
     if period:
         query = query.filter(Voucher.period == period)
+    else:
+        if year:
+            query = query.filter(Voucher.period >= f"{year}-01", Voucher.period <= f"{year}-12")
+        else:
+            if from_period:
+                query = query.filter(Voucher.period >= from_period)
+            if to_period:
+                query = query.filter(Voucher.period <= to_period)
     if status:
         query = query.filter(Voucher.status == status)
     if q:
@@ -159,12 +168,17 @@ def update_voucher(voucher_id: int, body: dict, db: Session = Depends(get_db)):
 
 @router.post("/{voucher_id}/void")
 def void_voucher(voucher_id: int, db: Session = Depends(get_db)):
+    """作废/恢复凭证（保留凭证记录便于追溯）；同步结转记录状态"""
+    from ..models import CarryoverRecord
     v = db.query(Voucher).get(voucher_id)
     if not v:
         raise HTTPException(404, "凭证不存在")
     if V.is_period_closed(db, v.period):
         raise HTTPException(400, f"期间 {v.period} 已结账，不能作废凭证")
-    v.status = "voided" if v.status != "voided" else "posted"
+    new_status = "voided" if v.status != "voided" else "posted"
+    v.status = new_status
+    for rec in db.query(CarryoverRecord).filter(CarryoverRecord.voucher_id == voucher_id).all():
+        rec.status = "reversed" if new_status == "voided" else "active"
     db.commit()
     return {"id": v.id, "status": v.status}
 

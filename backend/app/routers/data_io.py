@@ -35,23 +35,23 @@ def export_book(kind: str, period: str = None, from_period: str = None,
     fp = from_period or f"{period[:4]}-01"
     tp = to_period or period
     if kind == "general-ledger":
-        rows = L.general_ledger(db, period)
+        rows = L.general_ledger(db, period=None, from_period=fp, to_period=tp)
         data = [[r["code"], r["name"], r["opening_debit"], r["opening_credit"],
                  r["period_debit"], r["period_credit"],
                  r["closing_debit"], r["closing_credit"]] for r in rows]
         return _stream(X.export_table("总账", ["科目编码", "科目名称", "期初借方", "期初贷方",
                                               "本期借方", "本期贷方", "期末借方", "期末贷方"],
                                       data, [2, 3, 4, 5, 6, 7]),
-                       f"general_ledger_{period}.xlsx")
+                       f"general_ledger_{fp}_{tp}.xlsx")
     if kind == "balance-table":
-        rows = L.balance_table(db, period)
+        rows = L.balance_table(db, period=None, from_period=fp, to_period=tp)
         data = [[r["code"], r["name"], r["opening_debit"], r["opening_credit"],
                  r["period_debit"], r["period_credit"],
                  r["closing_debit"], r["closing_credit"]] for r in rows]
         return _stream(X.export_table("余额表", ["科目编码", "科目名称", "期初借方", "期初贷方",
                                                 "本期借方", "本期贷方", "期末借方", "期末贷方"],
                                       data, [2, 3, 4, 5, 6, 7]),
-                       f"balance_table_{period}.xlsx")
+                       f"balance_table_{fp}_{tp}.xlsx")
     if kind == "detail":
         if not account_code:
             raise HTTPException(400, "缺少 account_code")
@@ -84,12 +84,16 @@ def export_book(kind: str, period: str = None, from_period: str = None,
         return _stream(X.export_table("多栏账", headers, data, list(range(4, len(headers)))),
                        f"multicolumn_{account_code}_{fp}_{tp}.xlsx")
     if kind == "trial-balance":
-        tb = L.trial_balance(db, period)
-        data = [[r["code"], r["name"], r["debit"], r["credit"]] for r in tb["rows"]]
-        data.append(["", "合计", tb["total_debit"], tb["total_credit"]])
-        return _stream(X.export_table("试算平衡表", ["科目编码", "科目名称", "借方余额", "贷方余额"],
-                                      data, [2, 3]),
-                       f"trial_balance_{period}.xlsx")
+        tb = L.trial_balance(db, from_period=fp, to_period=tp)
+        data = [[r["code"], r["name"], r["opening_debit"], r["opening_credit"],
+                 r["period_debit"], r["period_credit"], r["debit"], r["credit"]]
+                for r in tb["rows"]]
+        data.append(["", "合计", "", "", "", "", tb["total_debit"], tb["total_credit"]])
+        return _stream(X.export_table("试算平衡表",
+                                      ["科目编码", "科目名称", "期初借方", "期初贷方",
+                                       "本期借方", "本期贷方", "期末借方", "期末贷方"],
+                                      data, [2, 3, 4, 5, 6, 7]),
+                       f"trial_balance_{fp}_{tp}.xlsx")
     raise HTTPException(404, f"未知账簿类型：{kind}")
 
 

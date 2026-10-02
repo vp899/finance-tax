@@ -191,8 +191,10 @@ class TestExport:
     def test_导出试算平衡表(self):
         st, data = api("GET", "/api/data/export/book/trial-balance?period=2030-03", raw=True)
         ws = load_workbook(io.BytesIO(data)).active
-        last = list(ws.iter_rows(values_only=True))[-1]
-        assert abs((last[2] or 0) - (last[3] or 0)) < 0.01  # 合计行借贷相等
+        rows = list(ws.iter_rows(values_only=True))
+        last = rows[-1]
+        assert abs((last[6] or 0) - (last[7] or 0)) < 0.01  # 合计行期末借贷相等
+        assert ws.max_column == 8  # 期初/本期/期末六列 + 科目两列
 
     def test_导出资产负债表与API一致(self):
         st, data = api("GET", "/api/reports/export/balance-sheet?period=2030-03", raw=True)

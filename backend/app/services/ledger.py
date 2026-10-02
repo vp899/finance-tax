@@ -83,20 +83,35 @@ def _entry_sums(db: Session, ids, from_period=None, to_period=None, period=None,
     return r2(d or 0), r2(c or 0)
 
 
-def opening_sums(db: Session, ids, before_period: str):
-    """before_period 之前的期初 + 发生额"""
+def opening_anchor_year(db: Session, before_period: str) -> str:
+    """期初锚定年度：取 ≤ before_period 年份的最近一个已录入期初的年度。
+
+    - 正常逐年录入期初时，锚定年度 = 当前年度（与旧行为一致）。
+    - 若新年度尚未录入期初（期初自动结转的场景），锚定到最近有期初的年度，
+      发生额从锚定年度年初连续累计，避免新年度余额被错误清零。
+    """
     year = before_period[:4]
+    row = (db.query(OpeningBalance.year)
+           .filter(OpeningBalance.year <= year)
+           .order_by(OpeningBalance.year.desc())
+           .first())
+    return row[0] if row else year
+
+
+def opening_sums(db: Session, ids, before_period: str):
+    """before_period 之前的期初 + 发生额（跨年锚定到最近有期初的年度）"""
+    anchor = opening_anchor_year(db, before_period)
     ob = db.query(
         func.coalesce(func.sum(OpeningBalance.debit), 0.0),
         func.coalesce(func.sum(OpeningBalance.credit), 0.0),
-    ).filter(OpeningBalance.account_id.in_(ids), OpeningBalance.year == year).one()
+    ).filter(OpeningBalance.account_id.in_(ids), OpeningBalance.year == anchor).one()
     od, oc = r2(ob[0] or 0), r2(ob[1] or 0)
     q = db.query(
         func.coalesce(func.sum(VoucherEntry.debit), 0.0),
         func.coalesce(func.sum(VoucherEntry.credit), 0.0),
     ).join(Voucher, Voucher.id == VoucherEntry.voucher_id).filter(
         VoucherEntry.account_id.in_(ids), Voucher.status == "posted",
-        Voucher.period >= f"{year}-01", Voucher.period < before_period,
+        Voucher.period >= f"{anchor}-01", Voucher.period < before_period,
     )
     d, c = q.one()
     return r2(od + (d or 0)), r2(oc + (c or 0))
@@ -141,18 +156,22 @@ def all_time_balance(db: Session, ids) -> float:
 
 # ---------------- 账簿 ----------------
 
-def general_ledger(db: Session, period: str):
+def general_ledger(db: Session, period: str = None, from_period: str = None,
+                   to_period: str = None):
     rows = []
     for a in db.query(Account).order_by(Account.code).all():
         ids = account_ids_for(db, a.code, rollup=True)
-        b = balance_block(db, ids, period=period)
+        b = balance_block(db, ids, period=period, from_period=from_period,
+                          to_period=to_period)
         rows.append({"code": a.code, "name": a.name, "level": a.level,
                      "direction": a.direction, **b})
     return rows
 
 
-def balance_table(db: Session, period: str):
-    return general_ledger(db, period)
+def balance_table(db: Session, period: str = None, from_period: str = None,
+                  to_period: str = None):
+    return general_ledger(db, period=period, from_period=from_period,
+                          to_period=to_period)
 
 
 def detail_ledger(db: Session, code: str, from_period: str, to_period: str, rollup: bool = True):
@@ -235,17 +254,55 @@ def multi_column_ledger(db: Session, code: str, from_period: str, to_period: str
             "rows": rows, "total": total}
 
 
-def trial_balance(db: Session, period: str):
+def trial_balance(db: Session, period: str = None, from_period: str = None,
+                  to_period: str = None):
+    """试算平衡表（支持单期间或起止区间）。
+
+    口径：
+    - 覆盖全部末级科目，以及历史上被直接记账/录入期初的非末级科目，
+      保证 Σ期初 + Σ发生 始终纳入合计，避免个别科目被漏计导致“试算不平衡”。
+    - 期初 = 区间开始前余额（跨年锚定），本期 = 区间发生额，期末 = 期初 + 本期。
+    """
+    to_period = to_period or period
+    from_period = from_period or to_period
+    if not (valid_period(from_period) and valid_period(to_period)) or from_period > to_period:
+        raise ValueError("期间格式应为 YYYY-MM，且起始期间不能晚于截止期间")
+
+    # 科目范围：全部末级 + 有期初/发生额的非末级（历史数据兜底）
+    scope = []
+    for a in db.query(Account).order_by(Account.code).all():
+        if a.is_leaf:
+            scope.append(a)
+            continue
+        ob = (db.query(OpeningBalance.id)
+              .filter(OpeningBalance.account_id == a.id).first())
+        if ob:
+            scope.append(a)
+            continue
+        d, c = _entry_sums(db, [a.id], from_period=from_period, to_period=to_period)
+        if d or c:
+            scope.append(a)
+
     td = tc = 0.0
     rows = []
-    for a in db.query(Account).filter(Account.is_leaf == 1).order_by(Account.code).all():
-        net = signed_balance(db, [a.id], to_period=period)
+    for a in scope:
+        od, oc = opening_sums(db, [a.id], from_period)
+        pd, pc = _entry_sums(db, [a.id], from_period=from_period, to_period=to_period)
+        net = r2((od + pd) - (oc + pc))
         d = net if net > 0 else 0.0
         c = -net if net < 0 else 0.0
         td, tc = r2(td + d), r2(tc + c)
-        rows.append({"code": a.code, "name": a.name, "debit": d, "credit": c})
+        rows.append({
+            "code": a.code, "name": a.name, "debit": d, "credit": c,
+            "is_leaf": bool(a.is_leaf),
+            "opening_debit": od, "opening_credit": oc,
+            "period_debit": pd, "period_credit": pc,
+            "closing_debit": d, "closing_credit": c,
+        })
     return {"rows": rows, "total_debit": td, "total_credit": tc,
-            "balanced": abs(td - tc) < 0.005}
+            "balanced": abs(td - tc) < 0.005,
+            "difference": r2(td - tc),
+            "period": to_period, "from_period": from_period, "to_period": to_period}
 
 
 # ---------------- 报表 ----------------
@@ -362,24 +419,36 @@ def _build_income_rows(p: dict):
     return rows
 
 
-def income_statement(db: Session, period: str, mode: str = "month"):
-    """利润表 / 利润表季报（剔除结转损益凭证，结转后仍显示真实成果）"""
+def income_statement(db: Session, period: str, mode: str = "month",
+                     from_period: str = None, to_period: str = None):
+    """利润表 / 利润表季报 / 区间利润表（剔除结转损益凭证，结转后仍显示真实成果）
+
+    mode=month   当期=本月，本年累计=年初至今
+    mode=quarter 当期=本季，本年累计=年初至今
+    mode=range   当期=from_period..to_period 区间合计，本年累计=年初至 to_period
+    """
     year = period[:4]
-    if mode == "quarter":
+    if mode == "range" and from_period and to_period:
+        cur_rows = _build_income_rows(
+            pl_components(db, from_period, to_period, exclude_kind="profit"))
+        from_p = f"{to_period[:4]}-01"
+    elif mode == "quarter":
         q = (int(period[5:7]) - 1) // 3 + 1
         from_p = f"{year}-{(q - 1) * 3 + 1:02d}"
+        cur_rows = _build_income_rows(pl_components(db, period, period, exclude_kind="profit"))
     else:
         from_p = f"{year}-01"
-    cur_rows = _build_income_rows(pl_components(db, period, period, exclude_kind="profit"))
-    ytd_rows = _build_income_rows(pl_components(db, from_p, period, exclude_kind="profit"))
-    seq_rows = ytd_rows
+        cur_rows = _build_income_rows(pl_components(db, period, period, exclude_kind="profit"))
+    ytd_rows = _build_income_rows(pl_components(db, from_p, to_period or period,
+                                                exclude_kind="profit"))
+    seq_rows = cur_rows if mode == "range" else ytd_rows
     rows = [{
         "name": c["name"],
         "current": c["value"], "ytd": y["value"], "quarter": s["value"],
         "type": c["type"],
     } for c, y, s in zip(cur_rows, ytd_rows, seq_rows)]
     return {"rows": rows, "period": period, "mode": mode,
-            "from_period": from_p,
+            "from_period": from_period or from_p, "to_period": to_period or period,
             "net_profit_ytd": ytd_rows[-1]["value"]}
 
 
