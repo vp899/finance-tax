@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
-  apiGet, curPeriod, defaultRange, downloadUrl, fmtMoney, rangeQuery,
+  apiGet, curPeriod, defaultRange, downloadUrl, fmtMoney, fmtQty, rangeQuery,
 } from "@/lib/api";
 import { Alert, Badge, Empty, Money, PeriodRange, Tabs } from "@/components/ui";
 
@@ -307,7 +307,7 @@ function Journal() {
                 </td>
                 <td className="td-num"><Money v={r.debit} dim /></td>
                 <td className="td-num"><Money v={r.credit} dim /></td>
-                <td className="td-num text-xs">{r.quantity || ""}</td>
+                <td className="td-num text-xs">{r.quantity ? fmtQty(r.quantity) : ""}</td>
               </tr>
             ))}
             {data && (

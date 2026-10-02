@@ -84,11 +84,18 @@ def auto_cashflow(db: Session, entries_data: list, account_map: dict):
     return entries_data
 
 
+def _decimal_places(value: float) -> int:
+    s = f"{value:.10f}".rstrip("0")
+    return len(s.split(".", 1)[1]) if "." in s else 0
+
+
 def validate_entries(db: Session, entries_data: list):
     """校验分录合法性，返回 (account_map, 错误列表)"""
     errors = []
     if not entries_data:
         return {}, ["凭证至少需要一行分录"]
+    qty_dp = int(L.get_setting(db, "decimal_qty", "2") or 2)
+    rate_dp = int(L.get_setting(db, "decimal_rate", "6") or 6)
     ids = [e.get("account_id") for e in entries_data if e.get("account_id")]
     accounts = db.query(Account).filter(Account.id.in_(ids)).all() if ids else []
     amap = {a.id: a for a in accounts}
@@ -100,10 +107,18 @@ def validate_entries(db: Session, entries_data: list):
             continue
         if not acc.is_leaf:
             errors.append(f"第{i}行：科目 {acc.code} {acc.name} 不是末级科目，不能记账")
+        if acc.is_disabled:
+            errors.append(f"第{i}行：科目 {acc.code} {acc.name} 已停用，不能记账")
         d_raw = float(e.get("debit", 0) or 0)
         c_raw = float(e.get("credit", 0) or 0)
         if abs(d_raw - round(d_raw, 2)) > 1e-9 or abs(c_raw - round(c_raw, 2)) > 1e-9:
             errors.append(f"第{i}行：金额最多两位小数")
+        qty_raw = float(e.get("quantity", 0) or 0)
+        if abs(qty_raw - round(qty_raw, qty_dp)) > 1e-9:
+            errors.append(f"第{i}行：数量最多 {qty_dp} 位小数")
+        rate_raw = float(e.get("exchange_rate", 1) or 1)
+        if abs(rate_raw - round(rate_raw, rate_dp)) > 1e-9:
+            errors.append(f"第{i}行：汇率最多 {rate_dp} 位小数")
         d = L.r2(d_raw)
         c = L.r2(c_raw)
         if d < 0 or c < 0:
@@ -120,7 +135,8 @@ def validate_entries(db: Session, entries_data: list):
     return amap, errors
 
 
-def build_entries(voucher: Voucher, entries_data: list, account_map: dict):
+def build_entries(voucher: Voucher, entries_data: list, account_map: dict,
+                  qty_dp: int = 2, rate_dp: int = 6):
     voucher.entries.clear()
     for i, e in enumerate(entries_data, 1):
         acc = account_map[e["account_id"]]
@@ -131,8 +147,8 @@ def build_entries(voucher: Voucher, entries_data: list, account_map: dict):
             debit=L.r2(e.get("debit", 0) or 0),
             credit=L.r2(e.get("credit", 0) or 0),
             currency=e.get("currency") or acc.currency or "CNY",
-            exchange_rate=L.r2(e.get("exchange_rate", 1) or 1),
-            quantity=e.get("quantity") or 0,
+            exchange_rate=round(float(e.get("exchange_rate", 1) or 1), rate_dp),
+            quantity=round(float(e.get("quantity", 0) or 0), qty_dp),
             unit=e.get("unit") or "",
             cashflow_code=e.get("cashflow_code") or None,
         ))
@@ -161,5 +177,7 @@ def create_voucher(db: Session, *, date: str, vtype: str = "记", entries: list,
     )
     db.add(v)
     db.flush()
-    build_entries(v, entries, amap)
+    build_entries(v, entries, amap,
+                  qty_dp=int(L.get_setting(db, "decimal_qty", "2") or 2),
+                  rate_dp=int(L.get_setting(db, "decimal_rate", "6") or 6))
     return v

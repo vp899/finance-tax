@@ -53,6 +53,26 @@ def account_by_code(db: Session, code: str):
     return db.query(Account).filter(Account.code == code).first()
 
 
+# 标准收入科目家族（损益类-收入）
+INCOME_CODE_PREFIXES = ("5001", "5051", "5111", "5301")
+
+
+def infer_category(code: str, direction: str = "D") -> str:
+    """按科目编码推断核算类型：资产/负债/权益/成本/损益（收入/费用）"""
+    c = (code or "")[:1]
+    if c == "1":
+        return "asset"
+    if c == "2":
+        return "liability"
+    if c == "3":
+        return "equity"
+    if c == "4":
+        return "cost"
+    if code.startswith(INCOME_CODE_PREFIXES):
+        return "income"
+    return "expense"
+
+
 def account_ids_for(db: Session, code: str, rollup: bool = True) -> list:
     acc = account_by_code(db, code)
     if not acc:
@@ -494,6 +514,7 @@ BS_ROWS = [
     ("line", "资本公积", "equity", ["3002"]),
     ("line", "盈余公积", "equity", ["3101"]),
     ("line", "未分配利润", "equity", ["__undistributed__"]),
+    ("line", "其他权益", "equity", ["__other_equity__"]),
     ("sub", "所有者权益合计", "equity_total"),
     ("total", "负债和所有者权益总计", "le_total"),
 ]
@@ -506,17 +527,20 @@ for _k, _n, _g, *_rest in BS_ROWS:
                 BS_COVERED.add(_c)
 
 
-def _line_value(db: Session, codes, to_period=None, from_period=None, beginning=False):
+def _line_value(db: Session, codes, to_period=None, from_period=None, beginning=False,
+                extra: float = 0.0):
+    if codes == ["__other_equity__"]:
+        return r2(extra)
     if codes == ["__undistributed__"]:
         ids = account_ids_for(db, "3103") + account_ids_for(db, "3104")
         if beginning:
             d, c = opening_sums(db, ids, f"{to_period[:4]}-01")
-            return r2(-(d - c))
+            return r2(r2(-(d - c)) + extra)
         val = r2(-signed_balance(db, ids, to_period=to_period))
         if from_period is None and to_period:
             val = r2(val + profit_net_ytd(db, to_period))
-        return val
-    total = 0.0
+        return r2(val + extra)
+    total = r2(extra)
     for code in codes:
         if beginning:
             ids = account_ids_for(db, code, rollup=True)
@@ -529,8 +553,45 @@ def _line_value(db: Session, codes, to_period=None, from_period=None, beginning=
     return total
 
 
+def _bs_extras(db: Session, period: str, year: str):
+    """报表行兕底金额：未被固定行覆盖的科目（用户自建科目/成本类）按类别归集，
+    保证任意科目表下资产负债表恒等式依然成立。
+
+    - 成本类（4xxx 生产成本/制造费用）→ 并入存货
+    - 其他资产类 → 其他流动资产
+    - 其他负债类 → 其他应付款
+    - 其他权益类 → 其他权益
+    返回 (期末 dict, 年初 dict)，key 为报表行名称。
+    """
+    covered = set()
+    for kind, name, grp, *rest in BS_ROWS:
+        if kind == "line":
+            for code in rest[0]:
+                if not code.startswith("__"):
+                    covered.update(account_ids_for(db, code, rollup=True))
+    covered.update(account_ids_for(db, "3103", rollup=True))
+    covered.update(account_ids_for(db, "3104", rollup=True))
+    names = {"cost": "存货", "asset": "其他流动资产",
+             "liability": "其他应付款", "equity": "其他权益"}
+    end = {v: 0.0 for v in names.values()}
+    beg = {v: 0.0 for v in names.values()}
+    year_start = f"{year}-01"
+    for a in db.query(Account).filter(Account.is_leaf == 1).all():
+        if a.id in covered or a.category in ("income", "expense"):
+            continue
+        name = names.get(a.category)
+        if not name:
+            continue
+        net_end = signed_balance(db, [a.id], to_period=period)
+        d, c = opening_sums(db, [a.id], year_start)
+        end[name] = r2(end[name] + net_end)
+        beg[name] = r2(beg[name] + r2(d - c))
+    return end, beg
+
+
 def balance_sheet(db: Session, period: str):
     year = period[:4]
+    extra_end, extra_beg = _bs_extras(db, period, year)
     rows = []
     vals_end, vals_beg = {}, {}
     for kind, name, grp, *rest in BS_ROWS:
@@ -538,8 +599,9 @@ def balance_sheet(db: Session, period: str):
             codes = rest[0]
             neg = grp in ("liab_cur", "liab_ncur", "equity") \
                 and codes != ["__undistributed__"]
-            e = _line_value(db, codes, to_period=period)
-            b = _line_value(db, codes, to_period=f"{year}-01", beginning=True)
+            e = _line_value(db, codes, to_period=period, extra=extra_end.get(name, 0.0))
+            b = _line_value(db, codes, to_period=f"{year}-01", beginning=True,
+                            extra=extra_beg.get(name, 0.0))
             if neg:  # 负债/权益类以贷方为正列示
                 e, b = r2(-e), r2(-b)
             vals_end[name], vals_beg[name] = e, b

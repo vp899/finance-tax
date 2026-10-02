@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   apiGet, apiPost, apiDel, curPeriod, defaultRange, downloadUrl, fmtMoney,
-  rangeFromTo, rangeQuery,
+  fmtPrice, fmtQty, rangeFromTo, rangeQuery,
 } from "@/lib/api";
 import { Alert, Badge, Empty, Modal, PeriodRange, Tabs } from "@/components/ui";
 import VoucherEditor from "@/components/VoucherEditor";
@@ -313,6 +313,8 @@ function VoucherList() {
                   <th className="th">科目</th>
                   <th className="th text-right">借方</th>
                   <th className="th text-right">贷方</th>
+                  <th className="th text-right">数量</th>
+                  <th className="th text-right">单价</th>
                 </tr>
               </thead>
               <tbody>
@@ -325,12 +327,20 @@ function VoucherList() {
                     </td>
                     <td className="td-num">{e.debit ? fmtMoney(e.debit) : ""}</td>
                     <td className="td-num">{e.credit ? fmtMoney(e.credit) : ""}</td>
+                    <td className="td-num text-xs">
+                      {e.quantity ? fmtQty(e.quantity) : ""}{e.quantity && e.unit ? ` ${e.unit}` : ""}
+                    </td>
+                    <td className="td-num text-xs">
+                      {e.quantity ? fmtPrice((e.debit || e.credit) / e.quantity) : ""}
+                    </td>
                   </tr>
                 ))}
                 <tr className="bg-slate-50 font-semibold">
                   <td className="td" colSpan={2}>合计</td>
                   <td className="td-num">{fmtMoney(view.total_debit)}</td>
                   <td className="td-num">{fmtMoney(view.total_credit)}</td>
+                  <td className="td"></td>
+                  <td className="td"></td>
                 </tr>
               </tbody>
             </table>

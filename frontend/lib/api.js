@@ -65,6 +65,29 @@ export function fmtMoney(v) {
   });
 }
 
+/* 小数位规则：数量/单价最多 2 位（不足补零），汇率最多 6 位 */
+export function fmtQty(v, dp = 2) {
+  if (v === null || v === undefined || v === "") return "";
+  return Number(v).toFixed(dp);
+}
+
+export function fmtPrice(v, dp = 2) {
+  if (v === null || v === undefined || v === "") return "";
+  return Number(v).toFixed(dp);
+}
+
+export function fmtRate(v, dp = 6) {
+  if (v === null || v === undefined || v === "") return "";
+  return String(Number(Number(v).toFixed(dp)));
+}
+
+/* 数量/单价输入过滤：最多 dp 位小数 */
+export function limitDecimals(value, dp = 2) {
+  const s = String(value).replace(/[^\d.]/g, "");
+  const parts = s.split(".");
+  return parts.length > 1 ? `${parts[0]}.${parts[1].slice(0, dp)}` : parts[0];
+}
+
 export function fmtDate(d) {
   return d ? String(d).slice(0, 10) : "";
 }

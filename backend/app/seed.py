@@ -1,5 +1,5 @@
 """默认数据：2013 小企业会计准则科目表、现金流量项目、设置等"""
-from .database import Base, engine, SessionLocal
+from .database import Base, engine, SessionLocal, ensure_schema
 from .models import (
     Setting, Account, VoucherType, CashflowItem, AccountCashflowMap,
     Unit, Currency, Period,
@@ -57,6 +57,9 @@ ACCOUNTS = [
     ("3101", "盈余公积", None, "C", "equity", "yygj yingyugongji"),
     ("3103", "本年利润", None, "C", "equity", "bnlr bennianlirun"),
     ("3104", "利润分配", None, "C", "equity", "lrfp lirunfenpei"),
+    # ---- 成本 ----
+    ("4001", "生产成本", None, "D", "cost", "sccb shengchancheengben"),
+    ("4051", "制造费用", None, "D", "cost", "zzfy zhizaofeiyong"),
     # ---- 收入 ----
     ("5001", "主营业务收入", None, "C", "income", "zyywsr"),
     ("5051", "其他业务收入", None, "C", "income", "qtywsr"),
@@ -188,6 +191,22 @@ DEFAULT_SETTINGS = {
     "profit_account": "3103",
     "vat_account": "222101",
     "number_rule": "period",               # 凭证号规则：period=按月编号
+    # 财务人员
+    "staff_bookkeeper": "",                # 记账人
+    "staff_reviewer": "",                  # 审核人
+    "staff_cashier": "",                   # 出纳人
+    "staff_supervisor": "",                # 会计主管
+    # 小数位设置
+    "decimal_qty": "2",                    # 数量最多 2 位小数（不足补零显示）
+    "decimal_price": "2",                  # 单价最多 2 位小数（不足补零显示）
+    "decimal_rate": "6",                    # 汇率最多 6 位小数
+    # 辅助核算全局开关：1=启用 0=停用
+    "aux_switch_project": "1",
+    "aux_switch_customer": "1",
+    "aux_switch_supplier": "1",
+    "aux_switch_dept": "1",
+    "aux_switch_employee": "1",
+    "aux_switch_inventory": "1",
 }
 
 
@@ -216,6 +235,7 @@ def ensure_standard_accounts(db):
 
 def ensure_seed():
     Base.metadata.create_all(bind=engine)
+    ensure_schema()
     db = SessionLocal()
     try:
         if db.query(Setting).count() == 0:

@@ -11,6 +11,10 @@ import {
   defaultRange,
   downloadUrl,
   fmtMoney,
+  fmtPrice,
+  fmtQty,
+  fmtRate,
+  limitDecimals,
   rangeFromTo,
   rangeLabel,
   rangeQuery,
@@ -164,5 +168,32 @@ describe("年度 / 区间查询口径", () => {
     expect(rangeLabel({ mode: "year", year: "2026" })).toBe("2026 年度");
     expect(rangeLabel({ mode: "range", from: "2025-11", to: "2026-04" })).toBe("2025-11 ~ 2026-04");
     expect(rangeLabel({ mode: "month", month: "2026-05" })).toBe("2026-05");
+  });
+});
+
+describe("小数位规则", () => {
+  test("数量最多 2 位小数，不足补零", () => {
+    expect(fmtQty(1.5)).toBe("1.50");
+    expect(fmtQty(2)).toBe("2.00");
+    expect(fmtQty(1.234)).toBe("1.23");
+    expect(fmtQty("")).toBe("");
+  });
+
+  test("单价最多 2 位小数，不足补零", () => {
+    expect(fmtPrice(3)).toBe("3.00");
+    expect(fmtPrice(3.14159)).toBe("3.14");
+  });
+
+  test("汇率最多 6 位小数", () => {
+    expect(fmtRate(7.2)).toBe("7.2");
+    expect(fmtRate(7.12345678)).toBe("7.123457");
+    expect(fmtRate(7.123456)).toBe("7.123456");
+  });
+
+  test("limitDecimals 输入过滤", () => {
+    expect(limitDecimals("1.234", 2)).toBe("1.23");
+    expect(limitDecimals("12", 2)).toBe("12");
+    expect(limitDecimals("a1.2b3", 2)).toBe("1.23");
+    expect(limitDecimals("7.1234567", 6)).toBe("7.123456");
   });
 });

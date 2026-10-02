@@ -81,7 +81,7 @@ def suggest(q: str = "", db: Session = Depends(get_db)):
     """智能补全：科目 + 摘要"""
     q = (q or "").strip()
     ql = q.lower()
-    query = db.query(Account)
+    query = db.query(Account).filter(Account.is_disabled == 0)
     if ql:
         query = query.filter((Account.code.like(f"{ql}%")) |
                              (Account.name.like(f"%{q}%")) |
@@ -157,7 +157,9 @@ def update_voucher(voucher_id: int, body: dict, db: Session = Depends(get_db)):
         if errors:
             raise ValueError("；".join(errors))
         entries = V.auto_cashflow(db, entries, amap)
-        V.build_entries(v, entries, amap)
+        V.build_entries(v, entries, amap,
+                        qty_dp=int(L.get_setting(db, "decimal_qty", "2") or 2),
+                        rate_dp=int(L.get_setting(db, "decimal_rate", "6") or 6))
         db.commit()
         db.refresh(v)
         return _v2d(v)

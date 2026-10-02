@@ -853,16 +853,7 @@ def preview_vat_free(db, period):
 # ---------- 执行 ----------
 
 def _category_of(code: str, credit: bool) -> str:
-    if code[:1] == "1":
-        return "asset"
-    if code[:1] == "2":
-        return "liability"
-    if code[:1] == "3":
-        return "equity"
-    if code[:1] == "5":
-        # 损益类：收入科目家族才是 income（如 5001/5051/5111/5301）
-        return "income" if code.startswith(("5001", "5051", "5111", "5301")) else "expense"
-    return "income" if credit else "expense"
+    return L.infer_category(code, "C" if credit else "D")
 
 
 def execute(kind: str, db: Session, period: str, amount=None, extra: dict = None,

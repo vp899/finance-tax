@@ -22,15 +22,25 @@ class Account(Base):
     parent_code = Column(String(20), nullable=True, index=True)
     # D=借方 C=贷方
     direction = Column(String(1), default="D")
-    # asset / liability / equity / income / expense
+    # asset / liability / equity / cost / income / expense
+    # （income+expense 合称损益类；cost=成本类）
     category = Column(String(20), default="asset")
     pinyin = Column(String(120), default="")  # 首字母 + 全拼，用于智能补全
     is_leaf = Column(Integer, default=1)
+    is_disabled = Column(Integer, default=0)  # 1=停用（不能新记账，历史数据保留）
+    quantity_accounting = Column(Integer, default=0)  # 数量核算
     currency = Column(String(10), default="CNY")
     unit = Column(String(20), default="")
     cashflow_code = Column(String(20), nullable=True)  # 默认现金流量项目
     level = Column(Integer, default=1)
     remark = Column(String(200), default="")
+    # 辅助核算开关（项目/客户/供应商/部门/员工/存货）
+    aux_project = Column(Integer, default=0)
+    aux_customer = Column(Integer, default=0)
+    aux_supplier = Column(Integer, default=0)
+    aux_dept = Column(Integer, default=0)
+    aux_employee = Column(Integer, default=0)
+    aux_inventory = Column(Integer, default=0)
 
 
 class OpeningBalance(Base):
@@ -42,7 +52,40 @@ class OpeningBalance(Base):
     debit = Column(Float, default=0.0)
     credit = Column(Float, default=0.0)
     quantity = Column(Float, default=0.0)
+    # 导入导出扩展字段（币种/原币/本年累计）
+    currency = Column(String(10), default="CNY")
+    orig_amount = Column(Float, default=0.0)      # 期初余额原币
+    ytd_debit = Column(Float, default=0.0)        # 本年借方累计（本位币）
+    ytd_credit = Column(Float, default=0.0)
+    ytd_debit_qty = Column(Float, default=0.0)
+    ytd_credit_qty = Column(Float, default=0.0)
+    ytd_debit_orig = Column(Float, default=0.0)
+    ytd_credit_orig = Column(Float, default=0.0)
     __table_args__ = (UniqueConstraint("account_id", "year", name="uq_opening"),)
+
+
+class OpeningBalanceItem(Base):
+    """科目期初辅助核算明细（导入导出按项展开，金额并入科目期初汇总）"""
+    __tablename__ = "opening_balance_items"
+    id = Column(Integer, primary_key=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False, index=True)
+    year = Column(String(4), nullable=False)
+    aux_type = Column(String(20), default="")   # project/customer/supplier/dept/employee/inventory
+    aux_name = Column(String(100), default="")
+    aux_code = Column(String(50), default="")
+    spec = Column(String(100), default="")      # 规格型号
+    unit = Column(String(20), default="")
+    currency = Column(String(10), default="CNY")
+    direction = Column(String(1), default="D")
+    qty = Column(Float, default=0.0)             # 期初数量
+    orig_amount = Column(Float, default=0.0)     # 期初余额原币
+    base_amount = Column(Float, default=0.0)     # 期初余额本位币
+    ytd_debit_qty = Column(Float, default=0.0)
+    ytd_debit_orig = Column(Float, default=0.0)
+    ytd_debit_base = Column(Float, default=0.0)
+    ytd_credit_qty = Column(Float, default=0.0)
+    ytd_credit_orig = Column(Float, default=0.0)
+    ytd_credit_base = Column(Float, default=0.0)
 
 
 class VoucherType(Base):

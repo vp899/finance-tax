@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { apiDel, apiGet, apiPost, apiPut, fmtMoney } from "@/lib/api";
+import AccountManager from "@/components/AccountManager";
 import { Alert, Badge, Empty, Modal, Tabs } from "@/components/ui";
 
 const TABS = [
@@ -22,7 +23,7 @@ export default function SettingsPage() {
       <h1 className="text-2xl font-bold text-slate-900">财税设置</h1>
       <Tabs tabs={TABS} active={tab} onChange={setTab} />
       {tab === "basic" && <BasicSettings />}
-      {tab === "accounts" && <Accounts />}
+      {tab === "accounts" && <AccountManager />}
       {tab === "opening" && <Opening />}
       {tab === "types" && <VoucherTypes />}
       {tab === "units" && <Units />}
@@ -67,6 +68,25 @@ function BasicSettings() {
     ["vat_free_quarter_limit", "小规模季销售额免征额"],
   ];
 
+  const staff = [
+    ["staff_bookkeeper", "记账人"],
+    ["staff_reviewer", "审核人"],
+    ["staff_cashier", "出纳人"],
+    ["staff_supervisor", "会计主管"],
+  ];
+
+  const decimals = [
+    ["decimal_qty", "数量小数位（最多 2 位，不足补零）"],
+    ["decimal_price", "单价小数位（最多 2 位，不足补零）"],
+    ["decimal_rate", "汇率小数位（最多 6 位）"],
+  ];
+
+  const auxSwitches = [
+    ["aux_switch_project", "项目"], ["aux_switch_customer", "客户"],
+    ["aux_switch_supplier", "供应商"], ["aux_switch_dept", "部门"],
+    ["aux_switch_employee", "员工"], ["aux_switch_inventory", "存货"],
+  ];
+
   return (
     <div className="card p-6 space-y-4">
       {msg.node}
@@ -101,6 +121,46 @@ function BasicSettings() {
           </div>
         ))}
       </div>
+
+      <div className="border-t border-slate-100 pt-4">
+        <h3 className="font-semibold text-slate-800 mb-2">财务人员</h3>
+        <div className="grid md:grid-cols-4 gap-4">
+          {staff.map(([k, label]) => (
+            <div key={k}>
+              <label className="label">{label}</label>
+              <input className="input" value={s[k] || ""} onChange={(e) => setS({ ...s, [k]: e.target.value })} />
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="border-t border-slate-100 pt-4">
+        <h3 className="font-semibold text-slate-800 mb-2">小数位设置</h3>
+        <div className="grid md:grid-cols-3 gap-4">
+          {decimals.map(([k, label]) => (
+            <div key={k}>
+              <label className="label">{label}</label>
+              <input type="number" min="0" max="8" className="input"
+                     value={s[k] ?? ""}
+                     onChange={(e) => setS({ ...s, [k]: e.target.value.replace(/[^\d]/g, "") })} />
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="border-t border-slate-100 pt-4">
+        <h3 className="font-semibold text-slate-800 mb-2">辅助核算开关</h3>
+        <div className="flex flex-wrap items-center gap-5">
+          {auxSwitches.map(([k, label]) => (
+            <label key={k} className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={s[k] !== "0"}
+                     onChange={(e) => setS({ ...s, [k]: e.target.checked ? "1" : "0" })} />
+              {label}
+            </label>
+          ))}
+        </div>
+        <div className="text-xs text-slate-400 mt-2">停用后，科目编辑中的对应辅助核算项不可勾选。</div>
+      </div>
       <div className="flex justify-end">
         <button
           className="btn-primary"
@@ -116,139 +176,6 @@ function BasicSettings() {
           保存设置
         </button>
       </div>
-    </div>
-  );
-}
-
-function Accounts() {
-  const [rows, setRows] = useState([]);
-  const [q, setQ] = useState("");
-  const [adding, setAdding] = useState(false);
-  const [form, setForm] = useState({ code: "", name: "", parent_code: "", direction: "D", category: "asset", pinyin: "" });
-  const msg = useMsg();
-  const load = useCallback(() => {
-    apiGet("/api/accounts").then(setRows).catch((e) => msg.setError(e.message));
-  }, []);
-  useEffect(load, [load]);
-
-  const filtered = rows.filter(
-    (a) => !q || a.code.includes(q) || a.name.includes(q) || a.pinyin.toLowerCase().includes(q.toLowerCase())
-  );
-
-  return (
-    <div className="card">
-      <div className="flex items-center gap-3 p-4 border-b border-slate-200">
-        <input className="input w-64" placeholder="搜索科目编码/名称/拼音" value={q} onChange={(e) => setQ(e.target.value)} />
-        <div className="flex-1" />
-        <button className="btn-primary" onClick={() => setAdding(true)}>＋ 新增科目</button>
-      </div>
-      {msg.node && <div className="p-4">{msg.node}</div>}
-      <div className="overflow-x-auto max-h-[65vh] overflow-y-auto">
-        <table className="w-full">
-          <thead className="sticky top-0">
-            <tr>
-              <th className="th">编码</th>
-              <th className="th">名称</th>
-              <th className="th">方向</th>
-              <th className="th">类别</th>
-              <th className="th">末级</th>
-              <th className="th">拼音</th>
-              <th className="th text-right">操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((a) => (
-              <tr key={a.id} className="hover:bg-slate-50">
-                <td className="td font-mono text-xs">{a.code}</td>
-                <td className="td">
-                  <span style={{ paddingLeft: (a.level - 1) * 16 }}>{a.name}</span>
-                </td>
-                <td className="td text-xs">{a.direction === "D" ? "借" : "贷"}</td>
-                <td className="td text-xs text-slate-500">
-                  {{ asset: "资产", liability: "负债", equity: "权益", income: "收入", expense: "成本费用" }[a.category]}
-                </td>
-                <td className="td">{a.is_leaf ? <Badge color="green">末级</Badge> : <Badge>上级</Badge>}</td>
-                <td className="td text-xs text-slate-400">{a.pinyin}</td>
-                <td className="td text-right">
-                  {!["asset", "liability", "equity", "income", "expense"].includes(a.category) || true ? (
-                    <button
-                      className="text-rose-600 text-xs hover:underline"
-                      onClick={async () => {
-                        if (!confirm(`确认删除科目 ${a.code} ${a.name}？`)) return;
-                        try {
-                          await apiDel(`/api/accounts/${a.id}`);
-                          load();
-                        } catch (e) {
-                          msg.setError(e.message);
-                        }
-                      }}
-                    >
-                      删除
-                    </button>
-                  ) : null}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <Modal open={adding} title="新增会计科目" onClose={() => setAdding(false)}>
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="label">科目编码</label>
-            <input className="input" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} />
-          </div>
-          <div>
-            <label className="label">科目名称</label>
-            <input className="input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-          </div>
-          <div>
-            <label className="label">上级科目编码（可空）</label>
-            <input className="input" value={form.parent_code} onChange={(e) => setForm({ ...form, parent_code: e.target.value })} />
-          </div>
-          <div>
-            <label className="label">余额方向</label>
-            <select className="input" value={form.direction} onChange={(e) => setForm({ ...form, direction: e.target.value })}>
-              <option value="D">借方</option>
-              <option value="C">贷方</option>
-            </select>
-          </div>
-          <div>
-            <label className="label">类别</label>
-            <select className="input" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
-              <option value="asset">资产</option>
-              <option value="liability">负债</option>
-              <option value="equity">权益</option>
-              <option value="income">收入</option>
-              <option value="expense">成本费用</option>
-            </select>
-          </div>
-          <div>
-            <label className="label">拼音（用于智能补全）</label>
-            <input className="input" value={form.pinyin} onChange={(e) => setForm({ ...form, pinyin: e.target.value })} />
-          </div>
-        </div>
-        <div className="flex justify-end gap-2 mt-5">
-          <button className="btn-ghost" onClick={() => setAdding(false)}>取消</button>
-          <button
-            className="btn-primary"
-            onClick={async () => {
-              try {
-                await apiPost("/api/accounts", form);
-                setAdding(false);
-                setForm({ code: "", name: "", parent_code: "", direction: "D", category: "asset", pinyin: "" });
-                load();
-                msg.setOk("科目已新增");
-              } catch (e) {
-                msg.setError(e.message);
-              }
-            }}
-          >
-            保存
-          </button>
-        </div>
-      </Modal>
     </div>
   );
 }

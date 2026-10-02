@@ -27,6 +27,48 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 
+def ensure_schema():
+    """轻量迁移：为已有库补齐新增列（SQLite 不支持加约束，只补列）"""
+    import sqlite3
+    if not os.path.exists(DB_PATH):
+        return
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cur = conn.cursor()
+        add_columns = {
+            "accounts": [
+                ("is_disabled", "INTEGER DEFAULT 0"),
+                ("quantity_accounting", "INTEGER DEFAULT 0"),
+                ("aux_project", "INTEGER DEFAULT 0"),
+                ("aux_customer", "INTEGER DEFAULT 0"),
+                ("aux_supplier", "INTEGER DEFAULT 0"),
+                ("aux_dept", "INTEGER DEFAULT 0"),
+                ("aux_employee", "INTEGER DEFAULT 0"),
+                ("aux_inventory", "INTEGER DEFAULT 0"),
+            ],
+            "opening_balances": [
+                ("currency", "VARCHAR(10) DEFAULT 'CNY'"),
+                ("orig_amount", "FLOAT DEFAULT 0"),
+                ("ytd_debit", "FLOAT DEFAULT 0"),
+                ("ytd_credit", "FLOAT DEFAULT 0"),
+                ("ytd_debit_qty", "FLOAT DEFAULT 0"),
+                ("ytd_credit_qty", "FLOAT DEFAULT 0"),
+                ("ytd_debit_orig", "FLOAT DEFAULT 0"),
+                ("ytd_credit_orig", "FLOAT DEFAULT 0"),
+            ],
+        }
+        for table, cols in add_columns.items():
+            existing = {r[1] for r in cur.execute(f"PRAGMA table_info({table})").fetchall()}
+            if not existing:
+                continue
+            for name, ddl in cols:
+                if name not in existing:
+                    cur.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def get_db():
     db = SessionLocal()
     try:

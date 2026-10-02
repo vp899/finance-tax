@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { apiGet, fmtMoney } from "@/lib/api";
+import { apiGet, fmtMoney, limitDecimals } from "@/lib/api";
 
 /* 科目智能补全：支持编码、名称、拼音首字母（如 yhck → 银行存款） */
 export function AccountCombobox({ value, onSelect, placeholder }) {
@@ -344,7 +344,7 @@ export default function VoucherEditor({ voucher, onSaved, onCancel }) {
                   <input
                     className="input text-right tabular-nums"
                     value={l.quantity}
-                    onChange={(e) => setLine(l.key, { quantity: e.target.value })}
+                    onChange={(e) => setLine(l.key, { quantity: limitDecimals(e.target.value, 2) })}
                   />
                 </td>
                 <td className="td p-1">

@@ -17,6 +17,18 @@ def get_settings(db: Session = Depends(get_db)):
 @router.put("")
 def put_settings(body: dict, db: Session = Depends(get_db)):
     for k, v in body.items():
+        if k.startswith("decimal_"):
+            try:
+                n = int(v)
+            except (TypeError, ValueError):
+                raise HTTPException(400, f"{k} 必须是整数")
+            if not (0 <= n <= 8):
+                raise HTTPException(400, f"{k} 小数位须在 0~8 之间")
+            v = str(n)
+        if k.startswith("aux_switch_") and str(v) not in ("0", "1", "true", "false", "True", "False"):
+            raise HTTPException(400, f"{k} 只能为 0/1")
+        if k.startswith("staff_"):
+            v = str(v or "")[:50]
         s = db.query(Setting).filter(Setting.key == k).first()
         if not s:
             s = Setting(key=k)
