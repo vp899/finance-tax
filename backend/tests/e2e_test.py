@@ -262,15 +262,18 @@ for path, name in [
     check(f"导出{name}", st == 200 and data[:2] == b"PK" and len(data) > 2000,
           f"st={st} len={len(data) if isinstance(data, bytes) else 0}")
 
-# 导入模板 -> 修改 -> 导入
+# 导入模板 -> 修改 -> 导入（新模板列：凭证类别 凭证号 凭证日期 附单据数 摘要 科目编码 科目名称 借方金额 贷方金额 …）
 st, tpl = api("GET", "/api/data/template/vouchers", raw=True)
 check("下载导入模板", st == 200 and tpl[:2] == b"PK")
 from openpyxl import load_workbook, Workbook
 wb = load_workbook(io.BytesIO(tpl))
 ws = wb.active
 ws.delete_rows(2, 10)
-ws.append(["2026-08-05", "记", "期初建账-现金", "1001", 5000, 0, "", ""])
-ws.append(["2026-08-05", "记", "期初建账-现金", "1002", 0, 5000, "", ""])
+def _imp_row(no, date, summary, code, name, debit, credit):
+    return (["记", no, date, 1, summary, code, name, debit, credit] + [""] * 17
+            + ["CNY", 1, "测试制单", "测试审核"])
+ws.append(_imp_row("记-901", "2026-08-05", "期初建账-现金", "1001", "库存现金", 5000, 0))
+ws.append(_imp_row("记-901", "2026-08-05", "期初建账-现金", "1002", "银行存款", 0, 5000))
 buf = io.BytesIO()
 wb.save(buf)
 buf.seek(0)
@@ -287,6 +290,11 @@ try:
         check("Excel 导入凭证", r.status == 200 and imp["created"] == 1, str(imp))
 except urllib.error.HTTPError as e:
     check("Excel 导入凭证", False, e.read().decode()[:200])
+
+st, vlist = api("GET", "/api/vouchers?period=2026-08&size=50")
+check("导入凭证保留原凭证号/制单人", st == 200 and any(
+    v.get("source_no") == "记-901" and v.get("maker") == "测试制单"
+    and v.get("attachment_count") == 1 for v in vlist["rows"]))
 
 st, bt8 = api("GET", "/api/books/balance-table?period=2026-08")
 check("导入后 2026-08 有数据", st == 200 and any(

@@ -8,10 +8,14 @@ export default function DataPage() {
   const [period, setPeriod] = useState(curPeriod());
   const [from, setFrom] = useState(`${curPeriod().slice(0, 4)}-01`);
   const [to, setTo] = useState(curPeriod());
+  const [detailAcc, setDetailAcc] = useState("");
   const [info, setInfo] = useState(null);
   const [msg, setMsg] = useState(null); // {type, text}
+  const [detailMsg, setDetailMsg] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [detailBusy, setDetailBusy] = useState(false);
   const importRef = useRef(null);
+  const detailRef = useRef(null);
   const restoreRef = useRef(null);
 
   const loadInfo = () => apiGet("/api/data/backup/info").then(setInfo).catch(() => {});
@@ -33,6 +37,37 @@ export default function DataPage() {
     } finally {
       setBusy(false);
       if (importRef.current) importRef.current.value = "";
+    }
+  };
+
+  const doDetailImport = async (file) => {
+    if (!file) return;
+    setDetailBusy(true);
+    setDetailMsg(null);
+    try {
+      const r = await apiUpload("/api/data/import/detail-ledger", file);
+      const parts = [
+        `读取 ${r.rows} 行`,
+        `生成凭证 ${r.created_vouchers} 张`,
+        r.merged_vouchers ? `并入已有凭证 ${r.merged_vouchers} 张` : "",
+        r.skipped_vouchers ? `重复跳过 ${r.skipped_vouchers} 张` : "",
+        r.draft_vouchers ? `草稿待补齐 ${r.draft_vouchers} 张` : "",
+        r.opening_rows ? `期初 ${r.opening_rows} 行（${r.opening_year} 年度）` : "",
+        r.created_accounts?.length ? `自动新增科目 ${r.created_accounts.length} 个` : "",
+      ].filter(Boolean);
+      setDetailMsg({
+        type: r.errors?.length || r.draft_vouchers ? "warn" : "success",
+        text: `导入完成：${parts.join("；")}` +
+          (r.errors?.length ? `
+错误：${r.errors.slice(0, 5).join("；")}` : "") +
+          (r.warnings?.length ? `
+提醒：${r.warnings.slice(0, 5).join("；")}` : ""),
+      });
+    } catch (e) {
+      setDetailMsg({ type: "error", text: e.message });
+    } finally {
+      setDetailBusy(false);
+      if (detailRef.current) detailRef.current.value = "";
     }
   };
 
@@ -59,7 +94,8 @@ export default function DataPage() {
   const books = [
     { key: "general-ledger", name: "总账", path: `/api/data/export/book/general-ledger?period=${period}` },
     { key: "balance-table", name: "余额表", path: `/api/data/export/book/balance-table?period=${period}` },
-    { key: "detail", name: "明细账（1002 银行存款示例）", path: `/api/data/export/book/detail?account_code=1002&from_period=${from}&to_period=${to}` },
+    { key: "detail", name: "明细账", path: `/api/data/export/detail-ledger?account_code=${detailAcc}&from_period=${from}&to_period=${to}` },
+    { key: "detail-old", name: "明细账（余额式，1002 示例）", path: `/api/data/export/book/detail?account_code=1002&from_period=${from}&to_period=${to}` },
     { key: "journal", name: "序时账", path: `/api/data/export/book/journal?from_period=${from}&to_period=${to}` },
     { key: "multi", name: "多栏账（管理费用示例）", path: `/api/data/export/book/multi-column?account_code=5602&from_period=${from}&to_period=${to}` },
     { key: "trial", name: "试算平衡表", path: `/api/data/export/book/trial-balance?period=${period}` },
@@ -85,6 +121,9 @@ export default function DataPage() {
           <input type="month" className="input w-40" value={from} onChange={(e) => setFrom(e.target.value)} />
           <span className="text-slate-400">至</span>
           <input type="month" className="input w-40" value={to} onChange={(e) => setTo(e.target.value)} />
+          <span className="text-sm text-slate-500">明细账科目（可选）</span>
+          <input className="input w-32" placeholder="留空=全部科目" value={detailAcc}
+                 onChange={(e) => setDetailAcc(e.target.value.trim())} />
         </div>
         <div className="grid md:grid-cols-3 xl:grid-cols-4 gap-3">
           {books.map((b) => (
@@ -104,8 +143,11 @@ export default function DataPage() {
         <div className="card p-5">
           <h2 className="font-semibold text-slate-800">凭证导入（Excel）</h2>
           <p className="text-sm text-slate-500 mt-2 leading-relaxed">
-            按模板填写：日期、凭证类型、摘要、科目编码、借方金额、贷方金额、数量、单位。
-            同一日期+类型的连续行合并为一张凭证，导入时自动校验借贷平衡与科目有效性。
+            按模板填写：凭证类别 凭证号 凭证日期 附单据数 摘要 科目编码 科目名称 借方金额 贷方金额
+            项目编码 项目 客户编码 客户 供应商编码 供应商 部门编码 部门 员工编码 员工 存货编码 存货
+            规格型号 数量 计量单位 单价 外币金额 币种 汇率 制单人 审核人。
+            同一凭证号+日期的行合并为一张凭证（保留原凭证号），导入时自动校验借贷平衡与科目有效性；
+            重复导入自动跳过，也可直接导入本系统导出的凭证明细。
           </p>
           <div className="flex gap-2 mt-4">
             <a className="btn-ghost" href={downloadUrl("/api/data/template/vouchers")}>
@@ -122,6 +164,38 @@ export default function DataPage() {
               />
             </label>
           </div>
+        </div>
+
+        <div className="card p-5">
+          <h2 className="font-semibold text-slate-800">明细账导入（Excel / CSV）</h2>
+          <p className="text-sm text-slate-500 mt-2 leading-relaxed">
+            格式：序号 科目编码 科目 日期 凭证号 摘要 借方 贷方 方向 余额。
+            期初行（日期只到年月或凭证号为“期初余额”）写入科目期初并设置期初年份；
+            记账行按“日期+凭证号”合并生成凭证并保留原凭证号；重复导入自动跳过。
+            若同一凭证只含单方科目，会先存为草稿，补齐对方科目再导入后自动转正式。
+          </p>
+          <div className="flex gap-2 mt-4">
+            <a className="btn-ghost" href={downloadUrl("/api/data/template/detail-ledger")}>
+              下载导入模板
+            </a>
+            <label className="btn-primary cursor-pointer">
+              {detailBusy ? "处理中…" : "选择明细账导入"}
+              <input
+                ref={detailRef}
+                type="file"
+                accept=".xlsx,.xls,.csv,.txt"
+                className="hidden"
+                onChange={(e) => doDetailImport(e.target.files?.[0])}
+              />
+            </label>
+          </div>
+          {detailMsg && (
+            <div className={`mt-3 text-xs whitespace-pre-wrap leading-relaxed ${
+              detailMsg.type === "error" ? "text-rose-600"
+                : detailMsg.type === "warn" ? "text-amber-600" : "text-emerald-600"}`}>
+              {detailMsg.text}
+            </div>
+          )}
         </div>
 
         <div className="card p-5">

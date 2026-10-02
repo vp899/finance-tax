@@ -89,8 +89,13 @@ def _decimal_places(value: float) -> int:
     return len(s.split(".", 1)[1]) if "." in s else 0
 
 
-def validate_entries(db: Session, entries_data: list):
-    """校验分录合法性，返回 (account_map, 错误列表)"""
+def validate_entries(db: Session, entries_data: list, require_balance: bool = True,
+                     allow_nonleaf: bool = False):
+    """校验分录合法性，返回 (account_map, 错误列表)；require_balance=False 时允许借贷不平（草稿）
+
+    allow_nonleaf：仅用于历史数据导入（如明细账导入），允许直接记到非末级科目，
+    试算平衡与账簿对这类历史数据有兑底口径。
+    """
     errors = []
     if not entries_data:
         return {}, ["凭证至少需要一行分录"]
@@ -105,7 +110,7 @@ def validate_entries(db: Session, entries_data: list):
         if not acc:
             errors.append(f"第{i}行：科目不存在")
             continue
-        if not acc.is_leaf:
+        if not acc.is_leaf and not allow_nonleaf:
             errors.append(f"第{i}行：科目 {acc.code} {acc.name} 不是末级科目，不能记账")
         if acc.is_disabled:
             errors.append(f"第{i}行：科目 {acc.code} {acc.name} 已停用，不能记账")
@@ -130,7 +135,7 @@ def validate_entries(db: Session, entries_data: list):
         if abs(d - L.r2(d)) > 1e-9 or abs(c - L.r2(c)) > 1e-9:
             errors.append(f"第{i}行：金额最多两位小数")
         total_d, total_c = L.r2(total_d + d), L.r2(total_c + c)
-    if abs(total_d - total_c) >= 0.005:
+    if require_balance and abs(total_d - total_c) >= 0.005:
         errors.append(f"借贷不平衡：借方合计 {total_d:.2f}，贷方合计 {total_c:.2f}")
     return amap, errors
 
@@ -151,27 +156,37 @@ def build_entries(voucher: Voucher, entries_data: list, account_map: dict,
             quantity=round(float(e.get("quantity", 0) or 0), qty_dp),
             unit=e.get("unit") or "",
             cashflow_code=e.get("cashflow_code") or None,
+            spec=(e.get("spec") or "")[:100],
+            price=L.r2(e.get("price", 0) or 0),
+            orig_amount=L.r2(e.get("orig_amount", 0) or 0),
+            aux_json=(e.get("aux_json") or "")[:2000],
         ))
 
 
 def create_voucher(db: Session, *, date: str, vtype: str = "记", entries: list,
                    status: str = "posted", source: str = "manual",
                    carryover_kind: str = None, remark: str = "",
-                   voucher_no: str = None) -> Voucher:
+                   voucher_no: str = None, source_no: str = None,
+                   attachment_count: int = 0, maker: str = "", reviewer: str = "",
+                   require_balance: bool = True, allow_nonleaf: bool = False) -> Voucher:
     period = date[:7]
     if not L.valid_period(period):
         raise ValueError(f"日期无效：{date}")
     if is_period_closed(db, period):
         raise ValueError(f"会计期间 {period} 已结账，不能新增凭证")
-    amap, errors = validate_entries(db, entries)
+    amap, errors = validate_entries(db, entries, require_balance=require_balance,
+                                    allow_nonleaf=allow_nonleaf)
     if errors:
         raise ValueError("；".join(errors))
     entries = auto_cashflow(db, entries, amap)
     ensure_period(db, period)
     v = Voucher(
         voucher_no=voucher_no or next_voucher_no(db, period, vtype),
+        source_no=(source_no or "")[:30],
         vtype=vtype or "记", date=date, period=period, status=status,
         source=source, carryover_kind=carryover_kind,
+        attachment_count=int(attachment_count or 0),
+        maker=(maker or "")[:50], reviewer=(reviewer or "")[:50],
         created_at=now_str(), posted_at=now_str() if status == "posted" else "",
         remark=remark[:200],
     )

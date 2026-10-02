@@ -182,6 +182,8 @@ function BasicSettings() {
 
 function Opening() {
   const [year, setYear] = useState(new Date().getFullYear().toString());
+  const [yearList, setYearList] = useState([]);
+  const [yearCfg, setYearCfg] = useState("");
   const [data, setData] = useState(null);
   const [edits, setEdits] = useState({});
   const msg = useMsg();
@@ -190,10 +192,22 @@ function Opening() {
       .then((d) => {
         setData(d);
         setEdits({});
+        setYearList(Array.from(new Set([...(d.years || []), d.year, String(new Date().getFullYear())])).sort());
+        if (d.opening_year) setYearCfg((c) => c || d.opening_year);
       })
       .catch((e) => msg.setError(e.message));
   }, [year]);
   useEffect(load, [load]);
+
+  const saveYearCfg = async () => {
+    try {
+      await apiPost("/api/accounts/openings/set-year", { year: yearCfg });
+      msg.setOk(`期初年份已设置为 ${yearCfg}`);
+      load();
+    } catch (e) {
+      msg.setError(e.message);
+    }
+  };
 
   const totalD = (data?.rows || []).reduce(
     (s, r) => s + (Number(edits[r.account_id] !== undefined ? (edits[r.account_id].debit ?? "") : r.debit) || 0), 0);
@@ -203,8 +217,12 @@ function Opening() {
 
   return (
     <div className="card">
-      <div className="flex items-center gap-3 p-4 border-b border-slate-200">
-        <input className="input w-32" value={year} onChange={(e) => setYear(e.target.value)} />
+      <div className="flex flex-wrap items-center gap-3 p-4 border-b border-slate-200">
+        <select className="input w-28" value={year} onChange={(e) => setYear(e.target.value)}>
+          {yearList.map((y) => <option key={y} value={y}>{y} 年度</option>)}
+          {!yearList.includes(year) && <option value={year}>{year} 年度</option>}
+        </select>
+        <input className="input w-24" value={year} onChange={(e) => setYear(e.target.value.replace(/[^\d]/g, "").slice(0, 4))} />
         <span className="text-sm text-slate-500">年度期初余额（借方合计 {fmtMoney(totalD)} / 贷方合计 {fmtMoney(totalC)}）</span>
         {balanced ? <Badge color="green">试算平衡</Badge> : <Badge color="red">不平衡</Badge>}
         <span className="text-xs text-slate-400">可直接修改已有期初；保存时按全年合并口径校验试算平衡</span>
@@ -229,6 +247,17 @@ function Opening() {
         >
           保存期初
         </button>
+      </div>
+      <div className="flex flex-wrap items-center gap-3 px-4 py-3 border-b border-slate-200 bg-slate-50/60">
+        <span className="text-sm text-slate-600 font-medium">科目期初年份设置</span>
+        <input className="input w-24" placeholder="YYYY"
+               value={yearCfg}
+               onChange={(e) => setYearCfg(e.target.value.replace(/[^\d]/g, "").slice(0, 4))} />
+        <button className="btn-ghost" onClick={saveYearCfg}>保存年份</button>
+        <span className="text-xs text-slate-400">
+          建账年份：科目期初默认在此年份下录入；新年度未录期初时自动锚定最近有期初的年度连续累计。
+          年度切换后可为不同年度分别录入期初。
+        </span>
       </div>
       {msg.node && <div className="p-4">{msg.node}</div>}
       <div className="overflow-x-auto max-h-[65vh] overflow-y-auto">

@@ -213,6 +213,7 @@ def detail_ledger(db: Session, code: str, from_period: str, to_period: str, roll
         net = r2(net + e.debit - e.credit)
         rows.append({
             "date": v.date, "period": v.period, "voucher_no": v.voucher_no,
+            "source_no": v.source_no or "",
             "summary": e.summary, "account_code": acc_map[e.account_id].code,
             "account_name": acc_map[e.account_id].name,
             "debit": e.debit, "credit": e.credit,
@@ -236,6 +237,7 @@ def journal(db: Session, from_period: str, to_period: str):
         a = acc_map[e.account_id]
         rows.append({
             "date": v.date, "period": v.period, "voucher_no": v.voucher_no,
+            "source_no": v.source_no or "",
             "vtype": v.vtype, "summary": e.summary,
             "account_code": a.code, "account_name": a.name,
             "debit": e.debit, "credit": e.credit,

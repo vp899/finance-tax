@@ -1,11 +1,38 @@
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+/* ---------- 账套（多套账） ----------
+ * 当前账套 id 存在 localStorage，所有请求自动带上 X-Book-Id 头，
+ * 下载链接自动附加 book_id 参数。
+ */
+const BOOK_KEY = "ft_book_id";
+
+export function currentBookId() {
+  if (typeof window === "undefined") return "default";
+  return window.localStorage.getItem(BOOK_KEY) || "default";
+}
+
+export function setBookId(id) {
+  if (typeof window !== "undefined") {
+    window.localStorage.setItem(BOOK_KEY, id || "default");
+  }
+}
+
+export function bookQuery(path = "") {
+  const id = currentBookId();
+  const q = `book_id=${encodeURIComponent(id)}`;
+  return path + (path.includes("?") ? "&" : "?") + q;
+}
+
+function bookHeaders(extra) {
+  return { "X-Book-Id": currentBookId(), ...(extra || {}) };
+}
+
 export function apiUrl(path) {
   return API + path;
 }
 
 export async function apiGet(path) {
-  const r = await fetch(API + path);
+  const r = await fetch(API + path, { headers: bookHeaders() });
   if (!r.ok) {
     let msg = `请求失败 (${r.status})`;
     try {
@@ -20,7 +47,7 @@ export async function apiGet(path) {
 export async function apiSend(method, path, body) {
   const r = await fetch(API + path, {
     method,
-    headers: body ? { "Content-Type": "application/json" } : undefined,
+    headers: bookHeaders(body ? { "Content-Type": "application/json" } : {}),
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!r.ok) {
@@ -41,7 +68,7 @@ export const apiDel = (path) => apiSend("DELETE", path);
 export async function apiUpload(path, file) {
   const fd = new FormData();
   fd.append("file", file);
-  const r = await fetch(API + path, { method: "POST", body: fd });
+  const r = await fetch(API + path, { method: "POST", headers: bookHeaders(), body: fd });
   if (!r.ok) {
     let msg = `上传失败 (${r.status})`;
     try {
@@ -54,7 +81,7 @@ export async function apiUpload(path, file) {
 }
 
 export function downloadUrl(path) {
-  return API + path;
+  return API + bookQuery(path);
 }
 
 export function fmtMoney(v) {

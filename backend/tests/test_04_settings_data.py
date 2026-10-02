@@ -229,7 +229,9 @@ class TestExport:
         st, data = api("GET", "/api/data/template/vouchers", raw=True)
         assert st == 200 and data[:2] == b"PK"
         ws = load_workbook(io.BytesIO(data)).active
-        assert "日期" in str(ws.cell(1, 1).value)
+        headers = [c.value for c in ws[1]]
+        assert headers[:5] == ["凭证类别", "凭证号", "凭证日期", "附单据数", "摘要"]
+        assert "科目编码" in headers and "借方金额" in headers and "贷方金额" in headers
 
 
 def _xlsx_bytes(rows):

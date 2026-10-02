@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import BookSwitcher from "@/components/BookSwitcher";
 
 const items = [
   { href: "/", label: "仪表盘", icon: "📊" },
@@ -11,6 +12,7 @@ const items = [
   { href: "/carryover", label: "结转与结账", icon: "🔄" },
   { href: "/settings", label: "财税设置", icon: "⚙️" },
   { href: "/data", label: "数据管理", icon: "💾" },
+  { href: "/booksets", label: "账套管理", icon: "🗂" },
 ];
 
 export default function Nav() {
@@ -21,6 +23,7 @@ export default function Nav() {
         <div className="text-lg font-bold text-white tracking-wide">财务报税系统</div>
         <div className="text-xs text-slate-400 mt-1">小企业会计准则 · SQLite</div>
       </div>
+      <BookSwitcher />
       <nav className="flex-1 py-3">
         {items.map((it) => {
           const active =

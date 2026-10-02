@@ -17,6 +17,10 @@ def get_settings(db: Session = Depends(get_db)):
 @router.put("")
 def put_settings(body: dict, db: Session = Depends(get_db)):
     for k, v in body.items():
+        if k == "opening_year":
+            v = str(v or "").strip()
+            if v and not (v.isdigit() and len(v) == 4 and 1990 <= int(v) <= 2999):
+                raise HTTPException(400, "期初年份格式应为 YYYY（1990~2999）")
         if k.startswith("decimal_"):
             try:
                 n = int(v)

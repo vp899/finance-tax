@@ -1,11 +1,14 @@
 """科目管理 + 科目期初 + 科目表/期初导入导出 + 数据清零"""
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models import (
-    Account, OpeningBalance, OpeningBalanceItem, VoucherEntry, Voucher, CarryoverRecord, Period,
+    Account, OpeningBalance, OpeningBalanceItem, VoucherEntry, Voucher, CarryoverRecord,
+    Period, Setting,
 )
 from ..services import ledger as L
 from ..services import excel_io as X
@@ -246,8 +249,42 @@ def batch_ops(body: dict, db: Session = Depends(get_db)):
 
 # ---------- 科目期初（录入/修改） ----------
 
+def _default_opening_year(db: Session) -> str:
+    """期初年份：优先取账套设置的期初年份，缺省当前年度"""
+    y = L.get_setting(db, "opening_year", "")
+    return y if (y and y.isdigit()) else datetime.now().strftime("%Y")
+
+
+@router.get("/openings/years")
+def opening_years(db: Session = Depends(get_db)):
+    """期初年份设置 + 已有期初数据的年份列表"""
+    years = sorted({r[0] for r in db.query(OpeningBalance.year).distinct().all()})
+    return {
+        "opening_year": _default_opening_year(db),
+        "configured": L.get_setting(db, "opening_year", ""),
+        "years": years,
+    }
+
+
+@router.post("/openings/set-year")
+@router.put("/openings/set-year")
+def set_opening_year(body: dict, db: Session = Depends(get_db)):
+    """设置科目期初年份（建账年份）"""
+    year = str(body.get("year") or "").strip()
+    if not (year.isdigit() and len(year) == 4 and 1990 <= int(year) <= 2999):
+        raise HTTPException(400, "年份格式应为 YYYY（1990~2999）")
+    s = db.query(Setting).filter(Setting.key == "opening_year").first()
+    if not s:
+        s = Setting(key="opening_year")
+        db.add(s)
+    s.value = year
+    db.commit()
+    return {"ok": True, "opening_year": year}
+
+
 @router.get("/openings/list")
-def list_openings(year: str, db: Session = Depends(get_db)):
+def list_openings(year: str = None, db: Session = Depends(get_db)):
+    year = str(year or "").strip() or _default_opening_year(db)
     obs = {o.account_id: o for o in db.query(OpeningBalance).filter(OpeningBalance.year == year).all()}
     rows = []
     td = tc = 0.0
@@ -270,7 +307,9 @@ def list_openings(year: str, db: Session = Depends(get_db)):
                      "ytd_credit": L.r2(o.ytd_credit) if o else 0.0,
                      "quantity": o.quantity if o else 0})
     return {"year": year, "rows": rows, "total_debit": td, "total_credit": tc,
-            "balanced": abs(td - tc) < 0.005}
+            "balanced": abs(td - tc) < 0.005,
+            "opening_year": _default_opening_year(db),
+            "years": sorted({r[0] for r in db.query(OpeningBalance.year).distinct().all()} | {year})}
 
 
 @router.put("/openings/save")
@@ -282,7 +321,7 @@ def save_openings(body: dict, db: Session = Depends(get_db)):
     - 保存后按“全年合并口径”校验试算平衡（而非仅本次提交行），
       防止分批修改后全年期初不平。
     """
-    year = str(body.get("year") or "")[:4]
+    year = str(body.get("year") or "").strip() or _default_opening_year(db)
     if not year.isdigit():
         raise HTTPException(400, "年份无效")
     rows = body.get("rows") or []

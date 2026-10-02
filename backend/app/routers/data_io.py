@@ -3,13 +3,16 @@ import os
 import shutil
 import tempfile
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from ..database import get_db, DB_PATH, engine, Base
+from ..database import (
+    get_db, get_book_id, book_db_path, book_engine, DB_PATH, engine, Base,
+)
 from ..models import Account
 from ..services import ledger as L
 from ..services import excel_io as X
+from ..services import detail_io as D
 
 router = APIRouter(prefix="/api/data", tags=["data"])
 
@@ -102,6 +105,41 @@ def template():
     return _stream(X.voucher_template(), "voucher_import_template.xlsx")
 
 
+@router.get("/export/detail-ledger")
+def export_detail_ledger(from_period: str = None, to_period: str = None,
+                         period: str = None, account_code: str = None,
+                         db: Session = Depends(get_db)):
+    """导出明细账（序号 科目编码 科目 日期 凭证号 摘要 借方 贷方 方向 余额）"""
+    fp = from_period or (f"{period[:4]}-01" if period else None)
+    tp = to_period or period
+    if not fp or not tp:
+        raise HTTPException(400, "请指定期间 period 或起止区间 from_period/to_period")
+    if not (L.valid_period(fp) and L.valid_period(tp)) or fp > tp:
+        raise HTTPException(400, "期间格式应为 YYYY-MM，且起始期间不能晚于截止期间")
+    return _stream(D.export_detail_ledger(db, account_code=account_code,
+                                         from_period=fp, to_period=tp),
+                   f"detail_ledger_{fp}_{tp}.xlsx")
+
+
+@router.get("/template/detail-ledger")
+def detail_ledger_template():
+    return _stream(D.detail_ledger_template(), "detail_ledger_import_template.xlsx")
+
+
+@router.post("/import/detail-ledger")
+async def import_detail_ledger(file: UploadFile = File(...), opening_year: str = None,
+                               db: Session = Depends(get_db)):
+    """导入明细账：期初行→科目期初，记账行→凭证（同日期+凭证号合并）"""
+    data = await file.read()
+    try:
+        res = D.import_detail_ledger(db, data, opening_year=opening_year)
+        db.commit()
+        return res
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(400, str(e))
+
+
 @router.post("/import/vouchers")
 async def import_vouchers(file: UploadFile = File(...), db: Session = Depends(get_db)):
     data = await file.read()
@@ -117,28 +155,32 @@ async def import_vouchers(file: UploadFile = File(...), db: Session = Depends(ge
 # ---------------- 备份 / 恢复 ----------------
 
 @router.get("/backup/info")
-def backup_info():
+def backup_info(request: Request):
+    bid = get_book_id(request)
+    path = book_db_path(bid)
     return {
-        "db_path": DB_PATH,
-        "size_bytes": os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0,
-        "created_at": datetime.fromtimestamp(os.path.getmtime(DB_PATH)).isoformat()
-        if os.path.exists(DB_PATH) else None,
+        "book_id": bid,
+        "db_path": path,
+        "size_bytes": os.path.getsize(path) if os.path.exists(path) else 0,
+        "created_at": datetime.fromtimestamp(os.path.getmtime(path)).isoformat()
+        if os.path.exists(path) else None,
     }
 
 
 @router.get("/backup/download")
-def backup_download():
-    """备份数据库为单个 SQLite 文件"""
+def backup_download(request: Request):
+    """备份当前账套数据库为单个 SQLite 文件"""
+    bid = get_book_id(request)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    tmp = os.path.join(tempfile.gettempdir(), f"finance_backup_{ts}.db")
-    src = engine.raw_connection()
+    tmp = os.path.join(tempfile.gettempdir(), f"finance_backup_{bid}_{ts}.db")
+    src = book_engine(bid).raw_connection()
     try:
         dst = __import__("sqlite3").connect(tmp)
         src.backup(dst)
         dst.close()
     finally:
         src.close()
-    fname = f"finance_backup_{ts}.db"
+    fname = f"finance_backup_{bid}_{ts}.db"
 
     def iterfile():
         with open(tmp, "rb") as f:
@@ -150,12 +192,14 @@ def backup_download():
 
 
 @router.post("/backup/restore")
-async def backup_restore(file: UploadFile = File(...)):
-    """从 SQLite 备份文件恢复（覆盖当前数据库）"""
+async def backup_restore(request: Request, file: UploadFile = File(...)):
+    """从 SQLite 备份文件恢复（覆盖当前账套数据库）"""
+    bid = get_book_id(request)
+    db_path = book_db_path(bid)
     data = await file.read()
     if len(data) < 100 or not data.startswith(b"SQLite format 3"):
         raise HTTPException(400, "不是有效的 SQLite 备份文件")
-    tmp = DB_PATH + ".restore"
+    tmp = db_path + ".restore"
     with open(tmp, "wb") as f:
         f.write(data)
     # 校验可打开
@@ -167,11 +211,11 @@ async def backup_restore(file: UploadFile = File(...)):
     except Exception:
         os.remove(tmp)
         raise HTTPException(400, "备份文件损坏，无法恢复")
-    engine.dispose()
-    shutil.move(tmp, DB_PATH)
+    book_engine(bid).dispose()
+    shutil.move(tmp, db_path)
     for suffix in ("-wal", "-shm"):
-        p = DB_PATH + suffix
+        p = db_path + suffix
         if os.path.exists(p):
             os.remove(p)
-    Base.metadata.create_all(bind=engine)
-    return {"ok": True, "restored_bytes": len(data)}
+    Base.metadata.create_all(bind=book_engine(bid))
+    return {"ok": True, "restored_bytes": len(data), "book_id": bid}

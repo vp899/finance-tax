@@ -207,6 +207,8 @@ DEFAULT_SETTINGS = {
     "aux_switch_dept": "1",
     "aux_switch_employee": "1",
     "aux_switch_inventory": "1",
+    # 科目期初年份（建账年份）：YYYY，留空则按当前年度
+    "opening_year": "",
 }
 
 
@@ -233,10 +235,16 @@ def ensure_standard_accounts(db):
     db.flush()
 
 
-def ensure_seed():
-    Base.metadata.create_all(bind=engine)
-    ensure_schema()
-    db = SessionLocal()
+def ensure_seed(bind=None):
+    """初始化种子数据（幂等）；bind 指定目标引擎（多账套时用于新建账套）"""
+    from sqlalchemy.orm import sessionmaker as _sm
+    target_engine = bind or engine
+    Base.metadata.create_all(bind=target_engine)
+    if bind is None:
+        ensure_schema()
+    else:
+        ensure_schema(str(target_engine.url).replace("sqlite://", "", 1))
+    db = _sm(autocommit=False, autoflush=False, bind=target_engine)()
     try:
         if db.query(Setting).count() == 0:
             for k, v in DEFAULT_SETTINGS.items():

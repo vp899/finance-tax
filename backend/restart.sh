@@ -12,6 +12,7 @@ sleep 1
 
 if [ "$1" = "fresh" ]; then
   rm -f data/finance.db data/finance.db-wal data/finance.db-shm
+  rm -rf data/books data/books.json
 fi
 
 nohup python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000 > server.log 2>&1 &

@@ -5,3 +5,4 @@ backend/data/finance.db-wal
 backend/data/finance.db-shm
 backend/server.log
 backend/.uvicorn.pid
+frontend/package-lock.json

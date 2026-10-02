@@ -11,9 +11,11 @@ router = APIRouter(prefix="/api/vouchers", tags=["vouchers"])
 
 def _v2d(v: Voucher, with_entries=True):
     d = {
-        "id": v.id, "voucher_no": v.voucher_no, "vtype": v.vtype, "date": v.date,
+        "id": v.id, "voucher_no": v.voucher_no, "source_no": v.source_no or "",
+        "vtype": v.vtype, "date": v.date,
         "period": v.period, "status": v.status, "attachment_count": v.attachment_count,
         "source": v.source, "carryover_kind": v.carryover_kind,
+        "maker": v.maker or "", "reviewer": v.reviewer or "",
         "remark": v.remark, "created_at": v.created_at,
     }
     if with_entries:
@@ -28,6 +30,8 @@ def _v2d(v: Voucher, with_entries=True):
                 "summary": e.summary, "debit": e.debit, "credit": e.credit,
                 "currency": e.currency, "quantity": e.quantity, "unit": e.unit,
                 "cashflow_code": e.cashflow_code,
+                "spec": e.spec or "", "price": e.price or 0.0,
+                "orig_amount": e.orig_amount or 0.0, "aux": e.aux_json or "",
             })
         d["entries"] = entries
         d["total_debit"] = total_d
@@ -65,6 +69,7 @@ def list_vouchers(period: str = None, year: str = None, from_period: str = None,
         d = _v2d(v, with_entries=False)
         d["entry_count"] = len(v.entries)
         d["total_debit"] = L.r2(sum(e.debit for e in v.entries))
+        d["total_credit"] = L.r2(sum(e.credit for e in v.entries))
         d["first_summary"] = v.entries[0].summary if v.entries else ""
         out.append(d)
     return {"total": total, "page": page, "size": size, "rows": out}

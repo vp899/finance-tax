@@ -102,6 +102,7 @@ class Voucher(Base):
     __tablename__ = "vouchers"
     id = Column(Integer, primary_key=True)
     voucher_no = Column(String(30), unique=True, nullable=False)  # 记-202610-001
+    source_no = Column(String(30), default="")  # 原始凭证号（明细账导入等外部系统编号）
     vtype = Column(String(10), default="记")
     date = Column(String(10), nullable=False)  # YYYY-MM-DD
     period = Column(String(7), nullable=False, index=True)  # YYYY-MM
@@ -111,6 +112,8 @@ class Voucher(Base):
     carryover_kind = Column(String(30), nullable=True)  # 结转类型
     created_at = Column(String(19), default="")
     posted_at = Column(String(19), default="")
+    maker = Column(String(50), default="")      # 制单人
+    reviewer = Column(String(50), default="")    # 审核人
     remark = Column(String(200), default="")
     entries = relationship(
         "VoucherEntry", back_populates="voucher",
@@ -133,6 +136,11 @@ class VoucherEntry(Base):
     quantity = Column(Float, default=0.0)
     unit = Column(String(20), default="")
     cashflow_code = Column(String(20), nullable=True)
+    # 明细扩展：规格型号 / 单价 / 外币金额 / 辅助核算（JSON {维度: {code, name}}）
+    spec = Column(String(100), default="")
+    price = Column(Float, default=0.0)
+    orig_amount = Column(Float, default=0.0)
+    aux_json = Column(Text, default="")
 
     voucher = relationship("Voucher", back_populates="entries")
     account = relationship("Account")
