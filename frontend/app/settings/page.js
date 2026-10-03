@@ -496,10 +496,26 @@ function Currencies() {
   );
 }
 
+const CF_MAP_TABS = [
+  { key: "all", label: "全部" },
+  { key: "asset", label: "资产" },
+  { key: "liability", label: "负债" },
+  { key: "equity", label: "权益" },
+  { key: "cost", label: "成本" },
+  { key: "pl", label: "损益" },
+];
+
+function cfCatMatch(tab, category) {
+  if (tab === "all") return true;
+  if (tab === "pl") return category === "income" || category === "expense";
+  return category === tab;
+}
+
 function CashflowMap() {
   const [rows, setRows] = useState([]);
   const [accounts, setAccounts] = useState([]);
   const [items, setItems] = useState([]);
+  const [tab, setTab] = useState("all");
   const [form, setForm] = useState({ account_id: "", cashflow_code: "" });
   const msg = useMsg();
   const load = () => {
@@ -508,37 +524,48 @@ function CashflowMap() {
     apiGet("/api/settings/cashflow-items").then(setItems).catch(() => {});
   };
   useEffect(() => { load(); }, []);
+  const shown = rows.filter((r) => cfCatMatch(tab, r.category));
+  const catAccounts = accounts.filter((a) => cfCatMatch(tab, a.category));
+  const tabs = CF_MAP_TABS.map((t) => ({
+    ...t,
+    label: t.key === "all"
+      ? `全部 ${rows.length}`
+      : `${t.label} ${rows.filter((r) => cfCatMatch(t.key, r.category)).length}`,
+  }));
   return (
     <div className="card">
-      <div className="flex gap-3 p-4 border-b border-slate-200">
-        <select className="input w-72" value={form.account_id} onChange={(e) => setForm({ ...form, account_id: e.target.value })}>
-          <option value="">选择科目…</option>
-          {accounts.map((a) => (
-            <option key={a.id} value={a.id}>{a.code} {a.name}</option>
-          ))}
-        </select>
-        <select className="input w-96" value={form.cashflow_code} onChange={(e) => setForm({ ...form, cashflow_code: e.target.value })}>
-          <option value="">选择现金流量项目…</option>
-          {items.map((c) => (
-            <option key={c.code} value={c.code}>{c.code} {c.name}</option>
-          ))}
-        </select>
-        <button
-          className="btn-primary"
-          onClick={async () => {
-            try {
-              await apiPost("/api/settings/cashflow-map", {
-                account_id: Number(form.account_id),
-                cashflow_code: form.cashflow_code,
-              });
-              load();
-            } catch (e) {
-              msg.setError(e.message);
-            }
-          }}
-        >
-          保存对照
-        </button>
+      <div className="p-4 border-b border-slate-200 space-y-3">
+        <Tabs tabs={tabs} active={tab} onChange={setTab} />
+        <div className="flex flex-wrap gap-3 items-center">
+          <select className="input w-72" value={form.account_id} onChange={(e) => setForm({ ...form, account_id: e.target.value })}>
+            <option value="">选择科目…</option>
+            {catAccounts.map((a) => (
+              <option key={a.id} value={a.id}>{a.code} {a.name}</option>
+            ))}
+          </select>
+          <select className="input w-96" value={form.cashflow_code} onChange={(e) => setForm({ ...form, cashflow_code: e.target.value })}>
+            <option value="">选择现金流量项目…</option>
+            {items.map((c) => (
+              <option key={c.code} value={c.code}>{c.code} {c.name}</option>
+            ))}
+          </select>
+          <button
+            className="btn-primary"
+            onClick={async () => {
+              try {
+                await apiPost("/api/settings/cashflow-map", {
+                  account_id: Number(form.account_id),
+                  cashflow_code: form.cashflow_code,
+                });
+                load();
+              } catch (e) {
+                msg.setError(e.message);
+              }
+            }}
+          >
+            保存对照
+          </button>
+        </div>
       </div>
       {msg.node && <div className="p-4">{msg.node}</div>}
       <div className="overflow-x-auto max-h-[65vh] overflow-y-auto">
@@ -546,17 +573,19 @@ function CashflowMap() {
           <thead className="sticky top-0">
             <tr>
               <th className="th">对方科目</th>
+              <th className="th">核算类型</th>
               <th className="th">现金流量项目</th>
               <th className="th text-right">操作</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => (
+            {shown.map((r) => (
               <tr key={r.id} className="hover:bg-slate-50">
                 <td className="td">
                   <span className="font-mono text-xs text-slate-400 mr-2">{r.account_code}</span>
                   {r.account_name}
                 </td>
+                <td className="td text-xs text-slate-500">{r.category_name || ""}</td>
                 <td className="td">
                   {r.cashflow_code} {items.find((i) => i.code === r.cashflow_code)?.name || ""}
                 </td>
@@ -575,6 +604,9 @@ function CashflowMap() {
             ))}
           </tbody>
         </table>
+        {shown.length === 0 && (
+          <div className="p-6 text-center text-sm text-slate-400">当前类别暂无对照记录</div>
+        )}
       </div>
     </div>
   );

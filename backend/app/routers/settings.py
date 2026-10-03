@@ -5,6 +5,7 @@ from ..database import get_db
 from ..models import (
     Setting, VoucherType, Unit, Currency, CashflowItem, AccountCashflowMap, Account,
 )
+from .accounts import CATEGORY_NAMES
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -178,12 +179,16 @@ def delete_cashflow_item(code: str, db: Session = Depends(get_db)):
 # 科目现金流量对照表
 @router.get("/cashflow-map")
 def list_cashflow_map(db: Session = Depends(get_db)):
+    """科目现金流量对照表（含科目核算类型/方向，便于与其它平台按类别比对）"""
     rows = []
     for m in db.query(AccountCashflowMap).all():
         acc = db.query(Account).get(m.account_id)
         rows.append({"id": m.id, "account_id": m.account_id,
                      "account_code": acc.code if acc else "",
                      "account_name": acc.name if acc else "",
+                     "category": acc.category if acc else "",
+                     "category_name": CATEGORY_NAMES.get(acc.category, acc.category) if acc else "",
+                     "direction": acc.direction if acc else "D",
                      "cashflow_code": m.cashflow_code})
     rows.sort(key=lambda r: r["account_code"])
     return rows
