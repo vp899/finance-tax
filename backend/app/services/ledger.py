@@ -117,17 +117,21 @@ def opening_anchor_year(db: Session, before_period: str) -> str:
     """期初锚定年度：取 ≤ before_period 年份的最近一个“已录入期初”的年度。
 
     - “已录入”= 该年度存在非零期初行；只有全零期初行的年度视为年期初尚未更新，
-      自动忽略并继续锚定到最近有期初的年度，跨年连续累计（避免新年度余额被错误清零）。
-    - 正常逐年录入期初时，锚定年度 = 当前年度（与旧行为一致）。
-    - 新年度录入了期初即以该年度为准（重新建账口径），全部科目同基准，
+      自动忽略并继续向更早年度锚定，跨年连续累计（避免新年度余额被错误清零）。
+    - 从未录入过期初（如只导入了多年度凭证）时，锚定到最早有已记账凭证的年度，
+      使余额/报表自建账起连续累计（否则每年年初余额被清成 0、期末余额漏掉以前年度）。
+    - 新年度录入了非零期初即以该年度为准（重新建账口径），全部科目同基准，
       保证资产负债表在任意年度都恒平。
     """
     year = before_period[:4]
     nz = _years_with_opening(db, before_period, nonzero_only=True)
     if nz:
         return nz[-1]
-    rows = _years_with_opening(db, before_period)
-    return rows[-1] if rows else year
+    # 无任何非零期初：锚定到最早有已记账凭证的年度（跨年连续累计）
+    first = (db.query(func.min(Voucher.period))
+             .filter(Voucher.status == "posted").scalar() or "")
+    fy = str(first)[:4]
+    return fy if fy and fy <= year else year
 
 
 def account_opening_anchor(db: Session, account_id: int, before_period: str) -> str:

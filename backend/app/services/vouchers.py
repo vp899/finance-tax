@@ -1,7 +1,9 @@
 """凭证服务：编号、校验、现金流量自动对照"""
 from datetime import datetime
 from sqlalchemy.orm import Session
-from ..models import Account, Voucher, VoucherEntry, AccountCashflowMap, Period
+from ..models import (
+    Account, Voucher, VoucherEntry, AccountCashflowMap, CashflowItem, Period,
+)
 from . import ledger as L
 
 CASH_CODES = ("1001", "1002", "1012")
@@ -46,7 +48,7 @@ def is_cash_account(acc: Account) -> bool:
 
 
 def find_cashflow_code(db: Session, acc: Account) -> str:
-    """按科目自身→上级逐级回退查现金流量对照"""
+    """按科目自身→上级逐级回退查现金流量对照（对照表/科目默认项目同口径）"""
     code = acc.code
     while code:
         a = account_map_by_code(db, code)
@@ -55,8 +57,61 @@ def find_cashflow_code(db: Session, acc: Account) -> str:
                 AccountCashflowMap.account_id == a.id).first()
             if m:
                 return m.cashflow_code
+            if a.cashflow_code:
+                return a.cashflow_code
         code = code[:-1]
     return None
+
+
+def set_account_cashflow_map(db: Session, acc: Account, code: str):
+    """科目默认现金流量项目 ↔ 科目现金流量对照表 双向同步（空=清除对照）"""
+    m = db.query(AccountCashflowMap).filter(
+        AccountCashflowMap.account_id == acc.id).first()
+    if code:
+        if not m:
+            db.add(AccountCashflowMap(account_id=acc.id, cashflow_code=code))
+        elif m.cashflow_code != code:
+            m.cashflow_code = code
+    elif m:
+        db.delete(m)
+
+
+def sync_account_cashflow_map(db: Session, fill_ids=None) -> int:
+    """科目表变更后同步科目现金流量对照表：
+
+    - 清理指向已删除科目的孤儿对照行（科目删除后对照表随之更新）；
+    - 为指定的新科目按【默认对照表 → 上级科目对照/默认项目】自动补默认对照，
+      使导入/新增科目后对照表随科目表对应更新（可后续在设置中修改）。
+    只补缺失、不覆盖已有对照，也不会重建用户手工删除的对照。
+    返回新建对照条数。
+    """
+    from ..seed import DEFAULT_CASHFLOW_MAP
+    valid = {c.code for c in db.query(CashflowItem).all()}
+    accounts = db.query(Account).all()
+    alive = {a.id for a in accounts}
+    existing = {}
+    for m in db.query(AccountCashflowMap).all():
+        if m.account_id not in alive:
+            db.delete(m)  # 孤儿对照行（科目已删除）
+        else:
+            existing[m.account_id] = m
+    added = 0
+    if fill_ids:
+        by_id = {a.id: a for a in accounts}
+        for aid in fill_ids:
+            a = by_id.get(aid)
+            if not a or a.id in existing:
+                continue
+            # 与凭证自动对照同口径：先按上级科目对照回退，再查默认对照表
+            code = find_cashflow_code(db, a) or DEFAULT_CASHFLOW_MAP.get(a.code)
+            if not code or code not in valid:
+                continue
+            db.add(AccountCashflowMap(account_id=a.id, cashflow_code=code))
+            existing[a.id] = True
+            if not a.cashflow_code:
+                a.cashflow_code = code
+            added += 1
+    return added
 
 
 def account_map_by_code(db: Session, code: str):

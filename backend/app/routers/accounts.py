@@ -8,10 +8,11 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models import (
     Account, OpeningBalance, OpeningBalanceItem, VoucherEntry, Voucher, CarryoverRecord,
-    Period, Setting,
+    Period, Setting, AccountCashflowMap, CashflowItem,
 )
 from ..services import ledger as L
 from ..services import excel_io as X
+from ..services import vouchers as VC
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
 
@@ -100,7 +101,11 @@ def _apply_fields(a: Account, body: dict, db: Session):
             raise HTTPException(400, f"核算类型无效：{body['category']}")
         a.category = body["category"]
     if "cashflow_code" in body:
-        a.cashflow_code = body["cashflow_code"] or None
+        code = (body.get("cashflow_code") or "").strip()
+        if code and not db.query(CashflowItem).filter(CashflowItem.code == code).first():
+            raise HTTPException(400, f"现金流量项目不存在：{code}")
+        a.cashflow_code = code or None
+        VC.set_account_cashflow_map(db, a, code)  # 对照表随科目默认项目同步
     for f in ("is_disabled", "quantity_accounting") + tuple(AUX_FIELDS):
         if f in body:
             setattr(a, f, 1 if body[f] else 0)
@@ -131,6 +136,9 @@ def create_account(body: dict, db: Session = Depends(get_db)):
     )
     db.add(a)
     _apply_fields(a, body, db)
+    db.flush()  # 先拿到 id，才能同步现金流量对照
+    # 新科目的现金流量对照随科目表同步（默认对照/上级科目继承）
+    VC.sync_account_cashflow_map(db, [a.id])
     db.commit()
     return {"id": a.id, "code": a.code, "name": a.name}
 
@@ -161,6 +169,7 @@ def update_account(account_id: int, body: dict, db: Session = Depends(get_db)):
             for child in db.query(Account).filter(Account.parent_code == a.code).all():
                 child.level = a.level + 1
     _apply_fields(a, body, db)
+    VC.sync_account_cashflow_map(db)  # 清理孤儿对照行（不重建已删对照）
     db.commit()
     return {"ok": True}
 
@@ -182,9 +191,10 @@ def delete_account(account_id: int, db: Session = Depends(get_db)):
     if ob:
         raise HTTPException(400, f"科目 {a.code} 已有期初余额，请先在科目期初中清零后再删除，"
                                 f"否则会导致试算不平衡")
-    # 清理零值期初行/辅助项，避免外键残留
+    # 清理零值期初行/辅助项/现金流量对照，避免外键残留
     db.query(OpeningBalanceItem).filter(OpeningBalanceItem.account_id == account_id).delete()
     db.query(OpeningBalance).filter(OpeningBalance.account_id == account_id).delete()
+    db.query(AccountCashflowMap).filter(AccountCashflowMap.account_id == account_id).delete()
     parent = L.account_by_code(db, a.parent_code) if a.parent_code else None
     db.delete(a)
     db.flush()
@@ -227,6 +237,8 @@ def batch_ops(body: dict, db: Session = Depends(get_db)):
                     OpeningBalanceItem.account_id == aid).delete()
                 db.query(OpeningBalance).filter(
                     OpeningBalance.account_id == aid).delete()
+                db.query(AccountCashflowMap).filter(
+                    AccountCashflowMap.account_id == aid).delete()
                 parent = L.account_by_code(db, a.parent_code) if a.parent_code else None
                 code = a.code
                 db.delete(a)

@@ -451,11 +451,16 @@ CHART_AUX_COLUMNS = [
 
 
 def import_accounts(db: Session, data: bytes) -> dict:
-    """导入科目表：按科目编码新增/更新；上级科目按编码前缀自动识别"""
+    """导入科目表：按科目编码新增/更新；上级科目按编码前缀自动识别
+
+    导入后同步科目现金流量对照表：新科目自动补默认对照（默认对照表/上级科目继承），
+    使对照表随科目表对应更新；同时清理已删除科目的孤儿对照行。
+    """
     from ..models import Account
     wb = load_workbook(io.BytesIO(data), data_only=True)
     ws = wb.active
     errors, created, updated = [], 0, 0
+    touched_ids = []
     for i, row in enumerate(ws.iter_rows(min_row=2, values_only=True), 2):
         if not row or all(v in (None, "") for v in row):
             continue
@@ -483,6 +488,7 @@ def import_accounts(db: Session, data: bytes) -> dict:
             for (field, _idx), val in zip(CHART_AUX_COLUMNS, aux):
                 setattr(a, field, val)
             updated += 1
+            touched_ids.append(a)
         else:
             parent_code = None
             for plen in range(len(code) - 1, 0, -1):
@@ -504,6 +510,7 @@ def import_accounts(db: Session, data: bytes) -> dict:
             if parent:
                 parent.is_leaf = 0
             created += 1
+            touched_ids.append(a)
     db.flush()
     # 维护末级标记/层级
     all_acc = db.query(Account).all()
@@ -513,7 +520,9 @@ def import_accounts(db: Session, data: bytes) -> dict:
         a.is_leaf = 0 if any(x.parent_code == a.code for x in all_acc) else 1
     if errors and created == 0 and updated == 0:
         raise ValueError("导入失败：" + "；".join(errors[:10]))
-    return {"created": created, "updated": updated, "errors": errors}
+    # 科目现金流量对照表随科目表更新（导入覆盖的科目补默认对照 + 清理孤儿对照行）
+    mapped = V.sync_account_cashflow_map(db, [a.id for a in touched_ids])
+    return {"created": created, "updated": updated, "cashflow_mapped": mapped, "errors": errors}
 
 
 def export_openings(db: Session, year: str) -> io.BytesIO:
@@ -567,7 +576,13 @@ def export_openings(db: Session, year: str) -> io.BytesIO:
 
 
 def import_openings(db: Session, year: str, data: bytes) -> dict:
-    """导入科目期初（含辅助核算明细与本年累计）；按全年合并口径校验试算平衡"""
+    """导入科目期初（含辅助核算明细与本年累计）
+
+    - 同一科目在文件内多行（辅助核算明细）自动累计；
+    - 以本次导入文件为准：重复导入同一文件幂等，不会把期初叠加翻倍；
+    - 方向必须显式填写（借/贷），避免空方向被默认成贷方导致符号翻转；
+    - 按全年合并口径校验试算平衡。
+    """
     from ..models import Currency, OpeningBalance, OpeningBalanceItem
     year = str(year or "")[:4]
     if not year.isdigit():
@@ -575,6 +590,7 @@ def import_openings(db: Session, year: str, data: bytes) -> dict:
     wb = load_workbook(io.BytesIO(data), data_only=True)
     ws = wb.active
     errors, imported = [], 0
+    touched = set()  # 本次导入已重置过的科目（同文件多行累计、重复导入幂等）
     for i, row in enumerate(ws.iter_rows(min_row=2, values_only=True), 2):
         if not row or all(v in (None, "") for v in row):
             continue
@@ -604,13 +620,28 @@ def import_openings(db: Session, year: str, data: bytes) -> dict:
             # 本位币为空时按币种汇率折算
             cur = db.query(Currency).filter(Currency.code == currency).first()
             base = L.r2(orig * (cur.rate if cur and cur.rate else 1))
-        if c[18] in (None, "") and base == 0 and orig == 0:
-            errors.append(f"第{i}行：方向/期初余额为空")
+        if c[18] in (None, ""):
+            if base == 0 and orig == 0 and qty == 0:
+                errors.append(f"第{i}行：方向/期初余额为空")
+            else:
+                errors.append(f"第{i}行：方向为空（应填借/贷）")
             continue
         direction = _dir_code(c[18])
         amt = L.r2(abs(base))
         o = db.query(OpeningBalance).filter(
             OpeningBalance.account_id == acc.id, OpeningBalance.year == year).first()
+        if acc.id not in touched:
+            touched.add(acc.id)
+            # 以本次导入为准：清零后重建该科目本年度期初，重复导入不叠加
+            if o:
+                o.debit = o.credit = o.quantity = 0.0
+                o.orig_amount = 0.0
+                o.ytd_debit = o.ytd_credit = 0.0
+                o.ytd_debit_qty = o.ytd_credit_qty = 0.0
+                o.ytd_debit_orig = o.ytd_credit_orig = 0.0
+            db.query(OpeningBalanceItem).filter(
+                OpeningBalanceItem.account_id == acc.id,
+                OpeningBalanceItem.year == year).delete()
         if not o:
             o = OpeningBalance(account_id=acc.id, year=year)
             db.add(o)

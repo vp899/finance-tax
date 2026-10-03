@@ -203,7 +203,7 @@ def export_detail_ledger(db: Session, account_code: str = None,
     _style_header(ws)
     for r in out_rows:
         ws.append(r)
-    for idx in (5, 6, 8):  # 借方 贷方 余额
+    for idx in (6, 7, 9):  # 借方 贷方 余额（1 基列 7/8/10）
         for row in ws.iter_rows(min_row=2, min_col=idx + 1, max_col=idx + 1):
             for c in row:
                 if c.value is not None:
@@ -248,6 +248,10 @@ def detail_ledger_template() -> io.BytesIO:
 
 def _is_opening_row(no: str, summary: str, date_raw: str) -> bool:
     mark = f"{no}{summary}"
+    # 有真实凭证号的行永远是记账行（避免摘要含“累计/期初”等字样的正常凭证被当成期初行）
+    has_voucher_no = bool(no) and not any(k in no for k in _OPENING_MARKS)
+    if has_voucher_no:
+        return False
     if any(k in mark for k in _OPENING_MARKS):
         return True
     if not date_raw:
@@ -280,6 +284,7 @@ def _ensure_account(db: Session, code: str, name: str, created: list) -> Account
     if parent:
         parent.is_leaf = 0
     db.flush()
+    V.sync_account_cashflow_map(db, [acc.id])  # 新科目现金流量对照随科目表同步
     created.append(f"{code} {acc.name}")
     return acc
 

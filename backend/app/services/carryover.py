@@ -727,7 +727,7 @@ def plan_exchange(db, period, cfg=None):
         a = db.query(Account).get(aid)
         if not a:
             continue
-        # 逐科目锚定：期初数量已含锚定年度之前的余额，故只累计锚定年度起的外币分录
+        # 逐科目锚定：期初原币已含锚定年度之前的余额，故只累计锚定年度起的外币分录
         anchor = L.account_opening_anchor(db, aid, period)
         start = f"{anchor}-01" if anchor else None
         orig = 0.0
@@ -738,7 +738,8 @@ def plan_exchange(db, period, cfg=None):
         ob = db.query(OpeningBalance).filter(
             OpeningBalance.account_id == aid, OpeningBalance.year == (anchor or "")).first() \
             if anchor else None
-        orig = L.r2(orig + (ob.quantity if ob else 0))
+        # 期初原币余额（orig_amount）；quantity 是数量核算，不是原币
+        orig = L.r2(orig + (ob.orig_amount if ob else 0))
         if abs(orig) < 0.005:
             continue
         cny = L.signed_balance(db, [aid], to_period=period)

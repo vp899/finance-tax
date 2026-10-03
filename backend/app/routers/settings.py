@@ -165,7 +165,11 @@ def create_cashflow_item(body: dict, db: Session = Depends(get_db)):
 
 @router.delete("/cashflow-items/{code}")
 def delete_cashflow_item(code: str, db: Session = Depends(get_db)):
-    db.query(AccountCashflowMap).filter(AccountCashflowMap.cashflow_code == code).delete()
+    for m in db.query(AccountCashflowMap).filter(AccountCashflowMap.cashflow_code == code).all():
+        acc = db.query(Account).get(m.account_id)
+        if acc and acc.cashflow_code == code:
+            acc.cashflow_code = None
+        db.delete(m)
     db.query(CashflowItem).filter(CashflowItem.code == code).delete()
     db.commit()
     return {"ok": True}
@@ -206,6 +210,11 @@ def upsert_cashflow_map(body: dict, db: Session = Depends(get_db)):
 
 @router.delete("/cashflow-map/{item_id}")
 def delete_cashflow_map(item_id: int, db: Session = Depends(get_db)):
-    db.query(AccountCashflowMap).filter(AccountCashflowMap.id == item_id).delete()
+    m = db.query(AccountCashflowMap).filter(AccountCashflowMap.id == item_id).first()
+    if m:
+        acc = db.query(Account).get(m.account_id)
+        if acc and acc.cashflow_code == m.cashflow_code:
+            acc.cashflow_code = None  # 科目默认项目同步清除，回退按上级科目对照
+        db.delete(m)
     db.commit()
     return {"ok": True}

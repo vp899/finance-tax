@@ -1,19 +1,12 @@
 {
-  "default": "book002",
+  "default": "default",
   "books": [
     {
       "id": "default",
       "name": "默认账套",
       "remark": "",
       "file": "finance.db",
-      "created_at": "2026-10-03 12:00:26"
-    },
-    {
-      "id": "book002",
-      "name": "上海硬扑特信息科技有限公司",
-      "remark": "",
-      "file": "books/book002.db",
-      "created_at": "2026-10-03 13:05:34"
+      "created_at": "2026-10-03 20:20:31"
     }
   ]
 }
