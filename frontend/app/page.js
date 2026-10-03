@@ -2,11 +2,11 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { apiGet, curPeriod, fmtMoney } from "@/lib/api";
+import { apiGet, fmtMoney, useSelMonth } from "@/lib/api";
 import { Badge, Money } from "@/components/ui";
 
 export default function Dashboard() {
-  const [period] = useState(curPeriod());
+  const [period] = useSelMonth();
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
 

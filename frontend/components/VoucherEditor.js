@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { apiGet, fmtMoney, limitDecimals } from "@/lib/api";
+import { Amt } from "@/components/ui";
 
 /* 科目智能补全：支持编码、名称、拼音首字母（如 yhck → 银行存款） */
 export function AccountCombobox({ value, onSelect, placeholder }) {
@@ -104,7 +105,7 @@ export function AccountCombobox({ value, onSelect, placeholder }) {
                 )}
               </div>
               <div className="text-xs text-slate-400 tabular-nums">
-                余额 {fmtMoney(a.balance)}
+                余额 <Amt v={a.balance} />
               </div>
             </div>
           ))}
@@ -318,7 +319,7 @@ export default function VoucherEditor({ voucher, onSaved, onCancel }) {
                     placeholder="0.00"
                     onFocus={(e) => e.target.select()}
                     onChange={(e) => {
-                      const v = e.target.value.replace(/[^\d.]/g, "");
+                      const v = e.target.value.replace(/[^\d.-]/g, "").replace(/(?!^)-/g, "");
                       setLine(l.key, { debit: v, credit: v ? "" : l.credit });
                     }}
                   />
@@ -330,7 +331,7 @@ export default function VoucherEditor({ voucher, onSaved, onCancel }) {
                     placeholder="0.00"
                     onFocus={(e) => e.target.select()}
                     onChange={(e) => {
-                      const v = e.target.value.replace(/[^\d.]/g, "");
+                      const v = e.target.value.replace(/[^\d.-]/g, "").replace(/(?!^)-/g, "");
                       setLine(l.key, { credit: v, debit: v ? "" : l.debit });
                     }}
                     onKeyDown={(e) => {
@@ -376,8 +377,8 @@ export default function VoucherEditor({ voucher, onSaved, onCancel }) {
                   ＋ 添加分录
                 </button>
               </td>
-              <td className="td-num font-semibold">{fmtMoney(totalD)}</td>
-              <td className="td-num font-semibold">{fmtMoney(totalC)}</td>
+              <td className="td-num font-semibold"><Amt v={totalD} /></td>
+              <td className="td-num font-semibold"><Amt v={totalC} /></td>
               <td className="td" colSpan={3}></td>
             </tr>
           </tfoot>

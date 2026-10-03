@@ -1020,30 +1020,35 @@ def reverse(db: Session, record_id: int):
 
 # ---------- 结账 / 反结账 ----------
 
-def close_period(db: Session, period: str, force: bool = False):
+def close_period(db: Session, period: str, force: bool = False,
+                 skip_checks: bool = False, note: str = ""):
+    """结账；skip_checks=True 跳过全部结账检查（历史导入数据已在其它系统结过账）"""
     if not L.valid_period(period):
         raise ValueError(f"期间格式错误：{period}")
-    tb = L.trial_balance(db, period=period)
-    if not tb["balanced"]:
-        bad = [f"{r['code']} {r['name']}" for r in tb["rows"]
-               if (r["closing_debit"] or r["closing_credit"])
-               and not r.get("is_leaf", True)]
-        hint = f"（非末级科目直接记账：{'、'.join(bad[:3])}）" if bad else ""
-        raise ValueError(
-            f"试算不平衡：借方合计 {tb['total_debit']:.2f} ≠ 贷方合计 "
-            f"{tb['total_credit']:.2f}，差额 {tb['difference']:.2f}，不能结账{hint}")
-    drafts = db.query(Voucher).filter(
-        Voucher.period == period, Voucher.status == "draft").count()
-    if drafts:
-        raise ValueError(f"期间 {period} 还有 {drafts} 张草稿凭证未审核记账")
-    if not force:
-        pl = L.profit_net(db, period, period)
-        if abs(pl) >= 0.005:
+    if not skip_checks:
+        tb = L.trial_balance(db, period=period)
+        if not tb["balanced"]:
+            bad = [f"{r['code']} {r['name']}" for r in tb["rows"]
+                   if (r["closing_debit"] or r["closing_credit"])
+                   and not r.get("is_leaf", True)]
+            hint = f"（非末级科目直接记账：{'、'.join(bad[:3])}）" if bad else ""
             raise ValueError(
-                f"本期损益尚未结平（本期净利润 {pl:.2f}），请先执行【结转本期损益】，或使用强制结账")
+                f"试算不平衡：借方合计 {tb['total_debit']:.2f} ≠ 贷方合计 "
+                f"{tb['total_credit']:.2f}，差额 {tb['difference']:.2f}，不能结账{hint}")
+        drafts = db.query(Voucher).filter(
+            Voucher.period == period, Voucher.status == "draft").count()
+        if drafts:
+            raise ValueError(f"期间 {period} 还有 {drafts} 张草稿凭证未审核记账")
+        if not force:
+            pl = L.profit_net(db, period, period)
+            if abs(pl) >= 0.005:
+                raise ValueError(
+                    f"本期损益尚未结平（本期净利润 {pl:.2f}），请先执行【结转本期损益】，或使用强制结账")
     p = V.ensure_period(db, period)
     p.status = "closed"
     p.closed_at = V.now_str()
+    if note:
+        p.note = note[:200]
     return {"period": period, "status": "closed"}
 
 
@@ -1054,3 +1059,119 @@ def open_period(db: Session, period: str):
     p.status = "open"
     p.closed_at = ""
     return {"period": period, "status": "open"}
+
+
+def close_batch(db: Session, periods: list, skip_checks: bool = False,
+                note: str = ""):
+    """月份批量结账：逐月结账，单月失败不影响其他月份，结果逐月可查"""
+    if not periods:
+        raise ValueError("请至少选择一个会计期间")
+    results, closed, failed = [], 0, 0
+    for period in periods:
+        period = str(period or "")
+        try:
+            close_period(db, period, force=True, skip_checks=skip_checks, note=note)
+        except ValueError as e:
+            failed += 1
+            results.append({"period": period, "ok": False, "error": str(e)})
+        else:
+            closed += 1
+            results.append({"period": period, "ok": True, "status": "closed"})
+    return {"results": results, "closed": closed, "failed": failed,
+            "skip_checks": skip_checks}
+
+
+def open_batch(db: Session, periods: list):
+    """月份批量反结账"""
+    if not periods:
+        raise ValueError("请至少选择一个会计期间")
+    results, opened, failed = [], 0, 0
+    for period in periods:
+        period = str(period or "")
+        try:
+            open_period(db, period)
+        except ValueError as e:
+            failed += 1
+            results.append({"period": period, "ok": False, "error": str(e)})
+        else:
+            opened += 1
+            results.append({"period": period, "ok": True, "status": "open"})
+    return {"results": results, "opened": opened, "failed": failed}
+
+
+# ---------- 月份数据 / 结账状态 ----------
+
+def month_stats(db: Session) -> dict:
+    """按会计期间统计月份数据：凭证张数/借贷合计/草稿/导入/作废"""
+    from sqlalchemy import func, case
+    out = {}
+
+    def slot(period):
+        return out.setdefault(period, {
+            "voucher_count": 0, "import_count": 0, "manual_count": 0,
+            "draft_count": 0, "void_count": 0,
+            "total_debit": 0.0, "total_credit": 0.0,
+        })
+
+    rows = db.query(
+        Voucher.period,
+        func.count(Voucher.id),
+        func.coalesce(func.sum(case((Voucher.source == "import", 1), else_=0)), 0),
+        func.coalesce(func.sum(case((Voucher.status == "draft", 1), else_=0)), 0),
+        func.coalesce(func.sum(case((Voucher.status == "voided", 1), else_=0)), 0),
+    ).group_by(Voucher.period).all()
+    for period, cnt, imp, draft, void in rows:
+        s = slot(period)
+        s["voucher_count"] = int(cnt)
+        s["import_count"] = int(imp)
+        s["manual_count"] = int(cnt) - int(imp)
+        s["draft_count"] = int(draft)
+        s["void_count"] = int(void)
+    sums = db.query(
+        Voucher.period,
+        func.coalesce(func.sum(VoucherEntry.debit), 0.0),
+        func.coalesce(func.sum(VoucherEntry.credit), 0.0),
+    ).join(Voucher, Voucher.id == VoucherEntry.voucher_id).group_by(Voucher.period).all()
+    for period, d, c in sums:
+        s = slot(period)
+        s["total_debit"], s["total_credit"] = L.r2(d), L.r2(c)
+    return out
+
+
+def list_periods(db: Session) -> list:
+    """月份结账状态列表：全部会计期间 + 有凭证数据的月份（按期间倒序）"""
+    stats = month_stats(db)
+    rows = {p.period: {"period": p.period, "status": p.status,
+                       "closed_at": p.closed_at or "", "note": p.note or ""}
+            for p in db.query(Period).all()}
+    for period in stats:
+        rows.setdefault(period, {"period": period, "status": "open",
+                                 "closed_at": "", "note": ""})
+    out = []
+    for period in sorted(rows, reverse=True):
+        r = rows[period]
+        r.update(stats.get(period, {
+            "voucher_count": 0, "import_count": 0, "manual_count": 0,
+            "draft_count": 0, "void_count": 0,
+            "total_debit": 0.0, "total_credit": 0.0,
+        }))
+        out.append(r)
+    return out
+
+
+def sync_periods(db: Session, periods: list = None) -> dict:
+    """同步月份数据：为指定（或全部有数据的）月份补齐会计期间记录并刷新统计"""
+    if periods:
+        targets = [str(p or "") for p in periods]
+        for p in targets:
+            if not L.valid_period(p):
+                raise ValueError(f"期间格式错误：{p}")
+    else:
+        targets = sorted(month_stats(db))
+    created = []
+    for p in targets:
+        if not db.query(Period).filter(Period.period == p).first():
+            db.add(Period(period=p, status="open"))
+            created.append(p)
+    db.flush()
+    return {"synced": targets, "created": created, "periods": list_periods(db)}

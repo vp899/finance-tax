@@ -11,7 +11,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 from . import ledger as L
 
-MONEY_FMT = "#,##0.00"
+MONEY_FMT = "#,##0.00;[Red]-#,##0.00"
 THIN = Border(*[Side(style="thin", color="B0B0B0")] * 4)
 HEADER_FILL = PatternFill("solid", fgColor="D9E2F3")
 

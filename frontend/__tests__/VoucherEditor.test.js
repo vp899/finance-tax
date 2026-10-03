@@ -70,7 +70,10 @@ describe("AccountCombobox 智能补全", () => {
       target: { value: "yhck" },
     });
     await waitFor(() =>
-      expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining("q=yhck"))
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining("q=yhck"),
+        expect.anything()
+      )
     );
   });
 });

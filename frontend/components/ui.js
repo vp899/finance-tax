@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { onMonthChange, realPeriod, selMonth } from "@/lib/api";
 
 export function Modal({ open, title, onClose, children, wide }) {
   useEffect(() => {
@@ -48,8 +49,20 @@ export function Money({ v, dim }) {
   if (v === null || v === undefined || v === "") return <span className="text-slate-300">—</span>;
   const n = Number(v);
   return (
-    <span className={`tabular-nums ${dim && Math.abs(n) < 0.005 ? "text-slate-300" : ""}`}>
+    <span className={`tabular-nums ${n < 0 ? "text-rose-600" : ""} ${dim && Math.abs(n) < 0.005 ? "text-slate-300" : ""}`}>
       {n.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+    </span>
+  );
+}
+
+/** 金额展示：负数（红字）用红色显示，其余与 fmtMoney 一致 */
+export function Amt({ v, dp = 2 }) {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  if (Number.isNaN(n)) return <span>{String(v)}</span>;
+  return (
+    <span className={`tabular-nums ${n < 0 ? "text-rose-600" : ""}`}>
+      {n.toLocaleString("zh-CN", { minimumFractionDigits: dp, maximumFractionDigits: dp })}
     </span>
   );
 }
@@ -102,6 +115,17 @@ export function Field({ label, children }) {
  */
 export function PeriodRange({ value, onChange, showMonth = true }) {
   const set = (patch) => onChange({ ...value, ...patch });
+  // 选中月份变化时同步月份数据（按月口径自动跟随全局选中月份）
+  useEffect(
+    () =>
+      onMonthChange(() => {
+        const m = selMonth() || realPeriod();
+        if (value.mode === "month" && value.month !== m) {
+          onChange({ ...value, month: m });
+        }
+      }),
+    [value, onChange]
+  );
   return (
     <div className="flex flex-wrap items-center gap-2">
       <select

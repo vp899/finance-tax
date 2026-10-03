@@ -5,7 +5,7 @@ import {
   apiGet, apiPost, apiDel, curPeriod, defaultRange, downloadUrl, fmtMoney,
   fmtPrice, fmtQty, rangeFromTo, rangeQuery,
 } from "@/lib/api";
-import { Alert, Badge, Empty, Modal, PeriodRange, Tabs } from "@/components/ui";
+import { Alert, Badge, Empty, Modal, PeriodRange, Tabs, Amt } from "@/components/ui";
 import VoucherEditor from "@/components/VoucherEditor";
 
 const STATUS = {
@@ -74,16 +74,16 @@ function VoucherSummary() {
               <tr key={r.vtype}>
                 <td className="td">{r.vtype}</td>
                 <td className="td-num">{r.count}</td>
-                <td className="td-num">{fmtMoney(r.debit)}</td>
-                <td className="td-num">{fmtMoney(r.credit)}</td>
+                <td className="td-num"><Amt v={r.debit} /></td>
+                <td className="td-num"><Amt v={r.credit} /></td>
               </tr>
             ))}
             {data && (
               <tr className="bg-slate-50 font-semibold">
                 <td className="td">合计</td>
                 <td className="td-num">{data.count}</td>
-                <td className="td-num">{fmtMoney(data.total_debit)}</td>
-                <td className="td-num">{fmtMoney(data.total_credit)}</td>
+                <td className="td-num"><Amt v={data.total_debit} /></td>
+                <td className="td-num"><Amt v={data.total_credit} /></td>
               </tr>
             )}
           </tbody>
@@ -222,8 +222,8 @@ function VoucherList() {
                   </td>
                   <td className="td">{v.date}</td>
                   <td className="td max-w-xs truncate">{v.first_summary || v.remark || "—"}</td>
-                  <td className="td-num">{fmtMoney(v.total_debit)}</td>
-                  <td className="td-num">{fmtMoney(v.total_credit)}</td>
+                  <td className="td-num"><Amt v={v.total_debit} /></td>
+                  <td className="td-num"><Amt v={v.total_credit} /></td>
                   <td className="td">
                     <Badge color={STATUS[v.status]?.color}>{STATUS[v.status]?.label}</Badge>
                   </td>
@@ -325,8 +325,8 @@ function VoucherList() {
                       <span className="font-mono text-xs text-slate-400 mr-2">{e.account_code}</span>
                       {e.account_name}
                     </td>
-                    <td className="td-num">{e.debit ? fmtMoney(e.debit) : ""}</td>
-                    <td className="td-num">{e.credit ? fmtMoney(e.credit) : ""}</td>
+                    <td className="td-num">{e.debit ? <Amt v={e.debit} /> : ""}</td>
+                    <td className="td-num">{e.credit ? <Amt v={e.credit} /> : ""}</td>
                     <td className="td-num text-xs">
                       {e.quantity ? fmtQty(e.quantity) : ""}{e.quantity && e.unit ? ` ${e.unit}` : ""}
                     </td>
@@ -337,8 +337,8 @@ function VoucherList() {
                 ))}
                 <tr className="bg-slate-50 font-semibold">
                   <td className="td" colSpan={2}>合计</td>
-                  <td className="td-num">{fmtMoney(view.total_debit)}</td>
-                  <td className="td-num">{fmtMoney(view.total_credit)}</td>
+                  <td className="td-num"><Amt v={view.total_debit} /></td>
+                  <td className="td-num"><Amt v={view.total_credit} /></td>
                   <td className="td"></td>
                   <td className="td"></td>
                 </tr>

@@ -12,7 +12,7 @@ from . import sheet
 HEADER_FILL = PatternFill("solid", fgColor="D9E2F3")
 HEADER_FONT = Font(bold=True)
 THIN = Border(*[Side(style="thin", color="B0B0B0")] * 4)
-MONEY_FMT = "#,##0.00"
+MONEY_FMT = "#,##0.00;[Red]-#,##0.00"
 
 
 def _style_header(ws, row=1):
@@ -192,6 +192,7 @@ def import_vouchers(db: Session, data: bytes):
         mapping = {name: i for i, name in enumerate(VOUCHER_HEADERS)}
         start, has_no_col = 1, True
     errors, created, merged, skipped = [], 0, 0, 0
+    red_rows = 0
     groups = {}
     last_no, last_date = "", ""
     for i in range(start, len(rows)):
@@ -219,8 +220,8 @@ def import_vouchers(db: Session, data: bytes):
             continue
         last_no, last_date = no, date
         try:
-            debit = sheet.num(cells.get("借方金额"))
-            credit = sheet.num(cells.get("贷方金额"))
+            debit = sheet.num(cells.get("借方金额"), allow_negative=True)
+            credit = sheet.num(cells.get("贷方金额"), allow_negative=True)
             qty = sheet.num(cells.get("数量"))
             price = sheet.num(cells.get("单价"))
             orig = sheet.num(cells.get("外币金额"))
@@ -229,6 +230,8 @@ def import_vouchers(db: Session, data: bytes):
         except ValueError as e:
             errors.append(f"第{i + 1}行：{e}")
             continue
+        if debit < 0 or credit < 0:
+            red_rows += 1  # 红字（负数）金额原样入库
         vtype = sheet.text(cells.get("凭证类别")) or "记"
         key = (date, no) if no else (date, vtype)
         g = groups.setdefault(key, {
@@ -285,9 +288,18 @@ def import_vouchers(db: Session, data: bytes):
                     skipped += 1
                     continue
                 max_line = max([e.line_no for e in existing.entries] or [0])
-                appended = []
+                # 先按字典试算合并后是否平衡，平衡才落库（避免删未持久化分录报错）
+                total_d = L.r2(sum(e.debit for e in existing.entries) +
+                               sum(L.r2(e.get("debit", 0) or 0) for e in need))
+                total_c = L.r2(sum(e.credit for e in existing.entries) +
+                               sum(L.r2(e.get("credit", 0) or 0) for e in need))
+                if abs(total_d - total_c) >= 0.005:
+                    # 合并后借贷不平：拒绝追加，保持原凭证不变
+                    errors.append(f"凭证 {date} {no}：合并后借贷不平衡"
+                                  f"（借 {total_d:.2f} ≠ 贷 {total_c:.2f}），已拒绝")
+                    continue
                 for j, e in enumerate(need, 1):
-                    obj = VoucherEntry(
+                    existing.entries.append(VoucherEntry(
                         line_no=max_line + j, account_id=e["account_id"],
                         summary=(e.get("summary") or "")[:200],
                         debit=L.r2(e.get("debit", 0) or 0),
@@ -299,19 +311,7 @@ def import_vouchers(db: Session, data: bytes):
                         price=L.r2(e.get("price", 0) or 0),
                         orig_amount=L.r2(e.get("orig_amount", 0) or 0),
                         aux_json=(e.get("aux_json") or "")[:2000],
-                    )
-                    existing.entries.append(obj)
-                    appended.append(obj)
-                total_d = L.r2(sum(e.debit for e in existing.entries))
-                total_c = L.r2(sum(e.credit for e in existing.entries))
-                if abs(total_d - total_c) >= 0.005:
-                    # 合并后借贷不平：拒绝追加，保持原凭证不变
-                    for obj in appended:
-                        existing.entries.remove(obj)
-                        db.delete(obj)
-                    errors.append(f"凭证 {date} {no}：合并后借贷不平衡"
-                                  f"（借 {total_d:.2f} ≠ 贷 {total_c:.2f}），已拒绝")
-                    continue
+                    ))
                 if existing.status == "draft":
                     existing.status = "posted"
                     existing.posted_at = V.now_str()
@@ -322,13 +322,15 @@ def import_vouchers(db: Session, data: bytes):
                 db, date=date, vtype=g["vtype"], entries=entries, source="import",
                 source_no=no or "", attachment_count=g["attach"],
                 maker=g["maker"], reviewer=g["reviewer"],
+                allow_nonleaf=True,  # 历史数据导入兼容：允许直接记到非末级科目
             )
             created += 1
         except ValueError as e:
             errors.append(f"凭证 {date} {no or g['vtype']}：{e}")
     if errors and created == 0 and merged == 0:
         raise ValueError("导入失败：" + "；".join(errors[:10]))
-    return {"created": created, "merged": merged, "skipped": skipped, "errors": errors}
+    return {"created": created, "merged": merged, "skipped": skipped,
+            "red_rows": red_rows, "errors": errors}
 
 
 def _line_key(entry) -> tuple:

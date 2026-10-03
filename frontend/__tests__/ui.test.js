@@ -3,7 +3,7 @@
  */
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { Alert, Badge, Empty, Field, Modal, Money, Tabs } from "@/components/ui";
+import { Alert, Amt, Badge, Empty, Field, Modal, Money, Tabs } from "@/components/ui";
 
 describe("Modal", () => {
   test("open=false 时不渲染", () => {
@@ -77,6 +77,36 @@ describe("Money", () => {
   test("dim 模式下 0 显示灰色", () => {
     const { container } = render(<Money v={0} dim />);
     expect(container.querySelector(".text-slate-300")).toBeInTheDocument();
+  });
+
+  test("负数（红字）显示红色", () => {
+    const { container } = render(<Money v={-1.01} />);
+    expect(container.querySelector(".text-rose-600")).toBeInTheDocument();
+    expect(container.textContent).toBe("-1.01");
+  });
+});
+
+describe("Amt 金额红字展示", () => {
+  test("正数不标红", () => {
+    const { container } = render(<Amt v={1234.5} />);
+    expect(container.textContent).toBe("1,234.50");
+    expect(container.querySelector(".text-rose-600")).not.toBeInTheDocument();
+  });
+
+  test("负数（红字）原样展示并标红", () => {
+    const { container } = render(<Amt v={-1.01} />);
+    expect(container.textContent).toBe("-1.01");
+    expect(container.querySelector(".text-rose-600")).toBeInTheDocument();
+  });
+
+  test("0 显示 0.00", () => {
+    const { container } = render(<Amt v={0} />);
+    expect(container.textContent).toBe("0.00");
+  });
+
+  test("空值不渲染", () => {
+    const { container } = render(<Amt v={null} />);
+    expect(container.textContent).toBe("");
   });
 });
 

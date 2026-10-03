@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { apiGet, apiUpload, curPeriod, downloadUrl, fmtMoney } from "@/lib/api";
-import { Alert, Badge } from "@/components/ui";
+import { apiGet, apiUpload, curPeriod, downloadUrl, fmtMoney, useSelMonth } from "@/lib/api";
+import { Alert, Badge, Amt } from "@/components/ui";
 
 export default function DataPage() {
-  const [period, setPeriod] = useState(curPeriod());
+  const [period, setPeriod] = useSelMonth();
   const [from, setFrom] = useState(`${curPeriod().slice(0, 4)}-01`);
   const [to, setTo] = useState(curPeriod());
   const [detailAcc, setDetailAcc] = useState("");
@@ -30,6 +30,11 @@ export default function DataPage() {
       setMsg({
         type: "success",
         text: `导入完成：成功生成 ${r.created} 张凭证` +
+          (r.merged ? `；并入已有凭证 ${r.merged} 张` : "") +
+          (r.skipped ? `；重复跳过 ${r.skipped} 张` : "") +
+          (r.red_rows
+            ? `；${r.red_rows} 行红字（负数）金额已原样入库`
+            : "") +
           (r.errors?.length ? `；跳过 ${r.errors.length} 条问题数据：${r.errors.slice(0, 3).join("；")}` : ""),
       });
     } catch (e) {
@@ -54,6 +59,7 @@ export default function DataPage() {
         r.draft_vouchers ? `草稿待补齐 ${r.draft_vouchers} 张` : "",
         r.opening_rows ? `期初 ${r.opening_rows} 行（${r.opening_year} 年度）` : "",
         r.created_accounts?.length ? `自动新增科目 ${r.created_accounts.length} 个` : "",
+        r.red_rows ? `红字（负数）金额 ${r.red_rows} 行原样入库` : "",
       ].filter(Boolean);
       setDetailMsg({
         type: r.errors?.length || r.draft_vouchers ? "warn" : "success",
@@ -147,6 +153,7 @@ export default function DataPage() {
             项目编码 项目 客户编码 客户 供应商编码 供应商 部门编码 部门 员工编码 员工 存货编码 存货
             规格型号 数量 计量单位 单价 外币金额 币种 汇率 制单人 审核人。
             同一凭证号+日期的行合并为一张凭证（保留原凭证号），导入时自动校验借贷平衡与科目有效性；
+            负数金额（红字）原样入库并红字展示，支持利息收入等负数记法；
             重复导入自动跳过，也可直接导入本系统导出的凭证明细。
           </p>
           <div className="flex gap-2 mt-4">
@@ -204,7 +211,7 @@ export default function DataPage() {
             <div>数据库文件：SQLite（单文件，可直接拷贝留存）</div>
             {info && (
               <>
-                <div>大小：{fmtMoney(info.size_bytes / 1024)} KB</div>
+                <div>大小：<Amt v={info.size_bytes / 1024} /> KB</div>
                 <div>最后修改：{info.created_at?.replace("T", " ").slice(0, 19)}</div>
               </>
             )}

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiDel, apiGet, apiPost, apiPut, fmtMoney } from "@/lib/api";
 import AccountManager from "@/components/AccountManager";
-import { Alert, Badge, Empty, Modal, Tabs } from "@/components/ui";
+import { Alert, Badge, Empty, Modal, Tabs, Amt } from "@/components/ui";
 
 const TABS = [
   { key: "basic", label: "基本设置" },
@@ -223,7 +223,7 @@ function Opening() {
           {!yearList.includes(year) && <option value={year}>{year} 年度</option>}
         </select>
         <input className="input w-24" value={year} onChange={(e) => setYear(e.target.value.replace(/[^\d]/g, "").slice(0, 4))} />
-        <span className="text-sm text-slate-500">年度期初余额（借方合计 {fmtMoney(totalD)} / 贷方合计 {fmtMoney(totalC)}）</span>
+        <span className="text-sm text-slate-500">年度期初余额（借方合计 <Amt v={totalD} /> / 贷方合计 <Amt v={totalC} />）</span>
         {balanced ? <Badge color="green">试算平衡</Badge> : <Badge color="red">不平衡</Badge>}
         <span className="text-xs text-slate-400">可直接修改已有期初；保存时按全年合并口径校验试算平衡</span>
         <div className="flex-1" />
@@ -614,10 +614,10 @@ function Assets() {
             {fixed.map((f) => (
               <tr key={f.id}>
                 <td className="td">{f.name}</td>
-                <td className="td-num">{fmtMoney(f.original_value)}</td>
+                <td className="td-num"><Amt v={f.original_value} /></td>
                 <td className="td-num">{(f.residual_rate * 100).toFixed(0)}%</td>
                 <td className="td-num">{f.life_months}</td>
-                <td className="td-num font-medium">{fmtMoney(f.monthly_depreciation)}</td>
+                <td className="td-num font-medium"><Amt v={f.monthly_depreciation} /></td>
                 <td className="td text-right">
                   <button
                     className="text-rose-600 text-xs hover:underline"
@@ -668,9 +668,9 @@ function Assets() {
             {intangible.map((f) => (
               <tr key={f.id}>
                 <td className="td">{f.name}</td>
-                <td className="td-num">{fmtMoney(f.original_value)}</td>
+                <td className="td-num"><Amt v={f.original_value} /></td>
                 <td className="td-num">{f.amort_months}</td>
-                <td className="td-num font-medium">{fmtMoney(f.monthly_amortization)}</td>
+                <td className="td-num font-medium"><Amt v={f.monthly_amortization} /></td>
                 <td className="td text-right">
                   <button
                     className="text-rose-600 text-xs hover:underline"

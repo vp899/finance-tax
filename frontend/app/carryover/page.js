@@ -1,13 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { apiGet, apiPost, apiPut, curPeriod, fmtMoney } from "@/lib/api";
-import { Alert, Badge, Empty, Modal, PeriodRange, rangeQuery } from "@/components/ui";
+import { apiGet, apiPost, apiPut, fmtMoney, useSelMonth } from "@/lib/api";
+import { Alert, Badge, Empty, Modal, PeriodRange, rangeQuery, Amt } from "@/components/ui";
 
 const STATUS_COLOR = { created: "green", skipped: "amber", failed: "red", disabled: "slate" };
 
 export default function CarryoverPage() {
-  const [period, setPeriod] = useState(curPeriod());
+  const [period, setPeriod] = useSelMonth();
   const [op, setOp] = useState(null);
   const [error, setError] = useState("");
   const [ok, setOk] = useState("");
@@ -92,6 +92,16 @@ export default function CarryoverPage() {
       {error && <Alert onClose={() => setError("")}>{error}</Alert>}
       {ok && <Alert type="success" onClose={() => setOk("")}>{ok}</Alert>}
 
+      <MonthStatusPanel
+        periods={periods}
+        onSelect={setPeriod}
+        reload={() => setReload((x) => x + 1)}
+        notify={(okMsg, errMsg) => {
+          setOk(okMsg || "");
+          setError(errMsg || "");
+        }}
+      />
+
       <div className="grid md:grid-cols-2 xl:grid-cols-4 gap-4">
         {(Array.isArray(kinds) ? kinds : []).map((o) => (
           <button
@@ -156,7 +166,7 @@ export default function CarryoverPage() {
                   <td className="td">{r.period}</td>
                   <td className="td">{r.kind_name || r.kind}</td>
                   <td className="td">{r.voucher_no}</td>
-                  <td className="td-num">{fmtMoney(r.amount)}</td>
+                  <td className="td-num"><Amt v={r.amount} /></td>
                   <td className="td">
                     <Badge color={r.status === "active" ? "green" : "red"}>
                       {r.status === "active" ? "有效" : "已反结转"}
@@ -221,6 +231,161 @@ export default function CarryoverPage() {
           onError={(msg) => setError(msg)}
         />
       )}
+    </div>
+  );
+}
+
+/* ---------- 月份结账状态（批量结账 / 同步月份数据） ---------- */
+
+function MonthStatusPanel({ periods, onSelect, reload, notify }) {
+  const [selected, setSelected] = useState([]);
+  const [skipChecks, setSkipChecks] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const rows = Array.isArray(periods) ? periods : [];
+  const allChecked = rows.length > 0 && selected.length === rows.length;
+  const toggle = (p) =>
+    setSelected((s) => (s.includes(p) ? s.filter((x) => x !== p) : [...s, p]));
+
+  const run = async (kind) => {
+    if (kind !== "sync" && !selected.length) {
+      notify(null, "请先勾选需要操作的会计期间");
+      return;
+    }
+    const label =
+      kind === "close" ? "批量结账" : kind === "open" ? "批量反结账" : "同步月份数据";
+    const scope = selected.length ? selected.join("、") : "全部有数据的月份";
+    if (!confirm(`确认对 ${scope} 执行【${label}】？`)) return;
+    setBusy(true);
+    try {
+      let msg = "";
+      if (kind === "close") {
+        const r = await apiPost("/api/carryover/close-batch", {
+          periods: selected,
+          skip_checks: skipChecks,
+          note: "月份批量结账",
+        });
+        const failed = (r.results || []).filter((x) => !x.ok);
+        msg =
+          `批量结账完成：成功 ${r.closed} 个期间` +
+          (r.failed
+            ? `；失败 ${r.failed} 个：${failed
+                .map((x) => `${x.period}（${x.error}）`)
+                .join("；")}`
+            : "");
+      } else if (kind === "open") {
+        const r = await apiPost("/api/carryover/open-batch", { periods: selected });
+        const failed = (r.results || []).filter((x) => !x.ok);
+        msg =
+          `批量反结账完成：成功 ${r.opened} 个期间` +
+          (r.failed
+            ? `；失败 ${r.failed} 个：${failed
+                .map((x) => `${x.period}（${x.error}）`)
+                .join("；")}`
+            : "");
+      } else {
+        const r = await apiPost("/api/carryover/periods/sync", {
+          periods: selected.length ? selected : null,
+        });
+        msg =
+          `月份数据已同步：${(r.synced || []).length} 个期间` +
+          ((r.created || []).length ? `；新建会计期间 ${r.created.join("、")}` : "");
+      }
+      setSelected([]);
+      notify(msg, null);
+      reload();
+    } catch (e) {
+      notify(null, e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="card">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3.5 border-b border-slate-200">
+        <div>
+          <h2 className="font-semibold text-slate-800">月份结账状态</h2>
+          <div className="text-xs text-slate-400 mt-0.5">
+            点击期间可选中月份并同步该月数据；勾选多个月份后可批量结账（导入的历史凭证在其它系统已结过账时可跳过检查）
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={skipChecks}
+              onChange={(e) => setSkipChecks(e.target.checked)}
+            />
+            跳过全部结账检查（历史数据已在其它系统结账）
+          </label>
+          <button className="btn-ghost" disabled={busy} onClick={() => run("sync")}>
+            同步月份数据
+          </button>
+          <button className="btn-ghost" disabled={busy} onClick={() => run("open")}>
+            批量反结账
+          </button>
+          <button className="btn-primary" disabled={busy} onClick={() => run("close")}>
+            批量结账
+          </button>
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full">
+          <thead>
+            <tr>
+              <th className="th w-10">
+                <input
+                  type="checkbox"
+                  checked={allChecked}
+                  onChange={() =>
+                    setSelected(allChecked ? [] : rows.map((r) => r.period))
+                  }
+                />
+              </th>
+              <th className="th">会计期间</th>
+              <th className="th">结账状态</th>
+              <th className="th text-right">凭证数</th>
+              <th className="th text-right">其中导入</th>
+              <th className="th text-right">借方合计</th>
+              <th className="th text-right">贷方合计</th>
+              <th className="th text-right">草稿</th>
+              <th className="th">结账时间</th>
+              <th className="th">备注</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr
+                key={r.period}
+                className="hover:bg-slate-50 cursor-pointer"
+                onClick={() => onSelect(r.period)}
+              >
+                <td className="td" onClick={(e) => e.stopPropagation()}>
+                  <input
+                    type="checkbox"
+                    checked={selected.includes(r.period)}
+                    onChange={() => toggle(r.period)}
+                  />
+                </td>
+                <td className="td font-medium">{r.period}</td>
+                <td className="td">
+                  <Badge color={r.status === "closed" ? "red" : "green"}>
+                    {r.status === "closed" ? "已结账" : "未结账"}
+                  </Badge>
+                </td>
+                <td className="td-num">{r.voucher_count || 0}</td>
+                <td className="td-num">{r.import_count || 0}</td>
+                <td className="td-num"><Amt v={r.total_debit} /></td>
+                <td className="td-num"><Amt v={r.total_credit} /></td>
+                <td className="td-num">{r.draft_count || 0}</td>
+                <td className="td text-xs text-slate-400">{(r.closed_at || "").slice(0, 19)}</td>
+                <td className="td text-xs text-slate-500 max-w-xs truncate">{r.note}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!rows.length && <Empty text="暂无月份数据（导入或录入凭证后自动出现）" />}
+      </div>
     </div>
   );
 }
@@ -306,13 +471,13 @@ function OpDialog({ op, period, onClose, onDone, onError }) {
             {preview.items.map((it, i) => (
               <div key={i} className="flex justify-between border-b border-dashed py-1">
                 <span>{it.name || it.code}</span>
-                <span className="tabular-nums">{fmtMoney(it.amount ?? it.diff)}</span>
+                <span className="tabular-nums"><Amt v={it.amount ?? it.diff} /></span>
               </div>
             ))}
             {preview.total !== undefined && (
               <div className="flex justify-between font-semibold">
                 <span>合计</span>
-                <span>{fmtMoney(preview.total)}</span>
+                <span><Amt v={preview.total} /></span>
               </div>
             )}
           </div>
@@ -337,8 +502,8 @@ function OpDialog({ op, period, onClose, onDone, onError }) {
                       {l.name}
                     </td>
                     <td className="td text-xs text-slate-500">{l.summary}</td>
-                    <td className="td-num">{l.debit ? fmtMoney(l.debit) : ""}</td>
-                    <td className="td-num">{l.credit ? fmtMoney(l.credit) : ""}</td>
+                    <td className="td-num">{l.debit ? <Amt v={l.debit} /> : ""}</td>
+                    <td className="td-num">{l.credit ? <Amt v={l.credit} /> : ""}</td>
                   </tr>
                 ))}
               </tbody>
@@ -353,15 +518,15 @@ function OpDialog({ op, period, onClose, onDone, onError }) {
             <div className="grid grid-cols-3 gap-2 pt-1">
               <div className="bg-slate-50 rounded-lg p-2.5">
                 <div className="text-xs text-slate-500">城建税 {(preview.rates.city * 100).toFixed(0)}%</div>
-                <div className="font-semibold">{fmtMoney(preview.city_tax)}</div>
+                <div className="font-semibold"><Amt v={preview.city_tax} /></div>
               </div>
               <div className="bg-slate-50 rounded-lg p-2.5">
                 <div className="text-xs text-slate-500">教育费附加 {(preview.rates.edu * 100).toFixed(0)}%</div>
-                <div className="font-semibold">{fmtMoney(preview.edu_tax)}</div>
+                <div className="font-semibold"><Amt v={preview.edu_tax} /></div>
               </div>
               <div className="bg-slate-50 rounded-lg p-2.5">
                 <div className="text-xs text-slate-500">地方教育附加 {(preview.rates.local_edu * 100).toFixed(0)}%</div>
-                <div className="font-semibold">{fmtMoney(preview.local_edu_tax)}</div>
+                <div className="font-semibold"><Amt v={preview.local_edu_tax} /></div>
               </div>
             </div>
           </div>
@@ -535,7 +700,7 @@ function RunAllDialog({ period, onClose, onDone, onError }) {
                         {{ created: "已生成", skipped: "已跳过", failed: "失败", disabled: "已停用" }[r.status]}
                       </Badge>
                     </td>
-                    <td className="td-num">{r.amount ? fmtMoney(r.amount) : ""}</td>
+                    <td className="td-num">{r.amount ? <Amt v={r.amount} /> : ""}</td>
                     <td className="td">{r.voucher_no || ""}</td>
                     <td className="td text-xs text-slate-500">{r.message}</td>
                   </tr>

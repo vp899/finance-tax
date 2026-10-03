@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   apiDel, apiGet, apiPost, apiPut, apiUpload, downloadUrl, fmtMoney,
 } from "@/lib/api";
-import { Alert, Badge, Modal } from "@/components/ui";
+import { Alert, Badge, Modal, Amt } from "@/components/ui";
 
 const CATEGORY_OPTIONS = [
   ["asset", "资产"], ["liability", "负债"], ["equity", "权益"],

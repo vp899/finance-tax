@@ -317,6 +317,7 @@ def import_detail_ledger(db: Session, data: bytes, opening_year: str = None) -> 
     mapping, start = _header_map(rows)
     errors, warnings = [], []
     created_accounts = []
+    red_rows = 0
     opening_acc = {}      # (account_id, year) -> {"debit":, "credit":}
     run_net = {}          # account_id -> 按文件行序累计的净额（借正贷负），用于余额列核对
     opening_rows = 0
@@ -345,14 +346,16 @@ def import_detail_ledger(db: Session, data: bytes, opening_year: str = None) -> 
             errors.append(f"第{i + 1}行：科目编码无效（应为数字编码）：{code}")
             continue
         try:
-            debit = _num(cells.get("借方"))
-            credit = _num(cells.get("贷方"))
+            debit = _num(cells.get("借方"), allow_negative=True)
+            credit = _num(cells.get("贷方"), allow_negative=True)
             balance_raw = cells.get("余额")
             balance = _num(balance_raw, default=None, allow_negative=True) \
                 if balance_raw not in (None, "") else None
         except ValueError as e:
             errors.append(f"第{i + 1}行：{e}")
             continue
+        if debit < 0 or credit < 0:
+            red_rows += 1  # 红字（负数）金额原样入库
         direction = _text(cells.get("方向"))
 
         # ---------- 期初行 ----------
@@ -541,6 +544,7 @@ def import_detail_ledger(db: Session, data: bytes, opening_year: str = None) -> 
         "opening_total_credit": total_oc,
         "opening_balanced": abs(total_od - total_oc) < 0.005,
         "created_accounts": created_accounts,
+        "red_rows": red_rows,
         "errors": errors,
         "warnings": warnings,
     }

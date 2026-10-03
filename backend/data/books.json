@@ -6,14 +6,14 @@
       "name": "默认账套",
       "remark": "",
       "file": "finance.db",
-      "created_at": "2026-10-02 20:27:56"
+      "created_at": "2026-10-02 23:19:39"
     },
     {
       "id": "book002",
       "name": "上海硬扑特信息科技有限公司",
       "remark": "",
       "file": "books/book002.db",
-      "created_at": "2026-10-02 20:40:23"
+      "created_at": "2026-10-02 23:27:17"
     }
   ]
 }

@@ -1,5 +1,7 @@
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+import { useCallback, useEffect, useState } from "react";
+
 /* ---------- 账套（多套账） ----------
  * 当前账套 id 存在 localStorage，所有请求自动带上 X-Book-Id 头，
  * 下载链接自动附加 book_id 参数。
@@ -119,9 +121,51 @@ export function fmtDate(d) {
   return d ? String(d).slice(0, 10) : "";
 }
 
-export function curPeriod() {
+export function realPeriod() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+/* ---------- 选中月份（全局同步月份数据） ----------
+ * 前端所有页面针对选中月份同步月份数据：任一处修改选中月份后，
+ * 仪表盘 / 凭证 / 账簿 / 报表 / 结转 / 数据管理都以该月份为默认查询期间并自动刷新。
+ */
+const MONTH_KEY = "finance.selMonth";
+const MONTH_EVENT = "finance:month-changed";
+
+export function selMonth() {
+  if (typeof window === "undefined") return "";
+  return window.localStorage.getItem(MONTH_KEY) || "";
+}
+
+export function setSelMonth(month) {
+  if (typeof window === "undefined") return;
+  if (month) window.localStorage.setItem(MONTH_KEY, month);
+  else window.localStorage.removeItem(MONTH_KEY);
+  window.dispatchEvent(new Event(MONTH_EVENT));
+}
+
+/** 订阅选中月份变化（返回取消订阅函数），用于各页面同步月份数据 */
+export function onMonthChange(handler) {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener(MONTH_EVENT, handler);
+  return () => window.removeEventListener(MONTH_EVENT, handler);
+}
+
+/** 选中月份（未设置时为当前自然月） */
+export function curPeriod() {
+  return selMonth() || realPeriod();
+}
+
+/** [选中月份, 修改选中月份]；修改后全局页面同步刷新月份数据 */
+export function useSelMonth() {
+  const [month, setMonthState] = useState(() => curPeriod());
+  useEffect(() => onMonthChange(() => setMonthState(curPeriod())), []);
+  const setMonth = useCallback((m) => {
+    setSelMonth(m);
+    setMonthState(m || realPeriod());
+  }, []);
+  return [month, setMonth];
 }
 
 export function shiftPeriod(period, delta) {
@@ -137,13 +181,13 @@ export function shiftPeriod(period, delta) {
  * rangeQuery(value) → 附加到 API 的查询参数字符串
  */
 export function defaultRange() {
-  const now = new Date();
+  const month = curPeriod();
   return {
     mode: "month",
-    month: curPeriod(),
-    year: String(now.getFullYear()),
-    from: `${now.getFullYear()}-01`,
-    to: curPeriod(),
+    month,
+    year: month.slice(0, 4),
+    from: `${month.slice(0, 4)}-01`,
+    to: month,
   };
 }
 

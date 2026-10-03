@@ -95,6 +95,9 @@ def validate_entries(db: Session, entries_data: list, require_balance: bool = Tr
 
     allow_nonleaf：仅用于历史数据导入（如明细账导入），允许直接记到非末级科目，
     试算平衡与账簿对这类历史数据有兑底口径。
+
+    金额允许为负：红字（负数）金额原样保留（红字展示），如其它平台的负数利息收入；
+    同一行借方与贷方不能同时有值。
     """
     errors = []
     if not entries_data:
@@ -126,9 +129,7 @@ def validate_entries(db: Session, entries_data: list, require_balance: bool = Tr
             errors.append(f"第{i}行：汇率最多 {rate_dp} 位小数")
         d = L.r2(d_raw)
         c = L.r2(c_raw)
-        if d < 0 or c < 0:
-            errors.append(f"第{i}行：金额不能为负（红字冲销请用负数以外的方式）")
-        if d > 0 and c > 0:
+        if d and c:
             errors.append(f"第{i}行：借方与贷方金额不能同时有值")
         if d == 0 and c == 0:
             errors.append(f"第{i}行：借贷方金额不能同时为零")

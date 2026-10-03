@@ -209,10 +209,63 @@ class TestLegacyAndErrors:
         st, r = upload(p("/api/data/import/vouchers"), "bad4.xlsx", data)
         assert st == 400 and "凭证号为空" in r["detail"]
 
-    def test_负数金额报错(self):
+    def test_负数利息收入红字原样入库(self):
+        """其它系统常见的负数记法（利息收入冲减费用的负数借方）按红字原样入库"""
         data = xlsx([
-            row("记-204", "2033-06-08", "负数", "1001", "库存现金", -10, 0),
-            row("记-204", "2033-06-08", "负数", "1002", "银行存款", 0, -10),
+            row("记-204", "2033-06-08", "3月份银行收款(利息)", "1002", "银行存款", 1.01, 0),
+            row("记-204", "2033-06-08", "3月份银行收款(利息)", "560301", "利息支出", -1.01, 0),
+        ])
+        st, r = upload(p("/api/data/import/vouchers"), "red1.xlsx", data)
+        assert st == 200, r
+        assert r["created"] == 1 and r["errors"] == []
+        assert r["red_rows"] == 1
+        v = next(x for x in get(p("/api/vouchers?period=2033-06"))[1]["rows"]
+                 if x["source_no"] == "记-204")
+        detail = get(p(f"/api/vouchers/{v['id']}"))[1]
+        fin = next(x for x in detail["entries"] if x["account_code"] == "560301")
+        assert fin["debit"] == -1.01 and fin["credit"] == 0  # 红字原样入库
+        bank = next(x for x in detail["entries"] if x["account_code"] == "1002")
+        assert bank["debit"] == 1.01 and bank["credit"] == 0
+        # 借贷合计按带符号口径（1.01 + -1.01）
+        assert detail["total_debit"] == 0 and detail["total_credit"] == 0
+
+    def test_整张红字凭证原样入库(self):
+        data = xlsx([
+            row("记-205", "2033-06-09", "红字冲销", "1001", "库存现金", -10, 0),
+            row("记-205", "2033-06-09", "红字冲销", "1002", "银行存款", 0, -10),
+        ])
+        st, r = upload(p("/api/data/import/vouchers"), "red2.xlsx", data)
+        assert st == 200, r
+        assert r["created"] == 1 and r["red_rows"] == 2
+        v = next(x for x in get(p("/api/vouchers?period=2033-06"))[1]["rows"]
+                 if x["source_no"] == "记-205")
+        detail = get(p(f"/api/vouchers/{v['id']}"))[1]
+        cash = next(x for x in detail["entries"] if x["account_code"] == "1001")
+        bank = next(x for x in detail["entries"] if x["account_code"] == "1002")
+        assert cash["debit"] == -10 and cash["credit"] == 0
+        assert bank["debit"] == 0 and bank["credit"] == -10
+        assert detail["total_debit"] == -10 and detail["total_credit"] == -10
+
+    def test_负数贷方原样入库(self):
+        data = xlsx([
+            row("记-206", "2033-06-10", "负数贷方", "1001", "库存现金", 0, -5),
+            row("记-206", "2033-06-10", "负数贷方", "1002", "银行存款", -5, 0),
+        ])
+        st, r = upload(p("/api/data/import/vouchers"), "red3.xlsx", data)
+        assert st == 200, r
+        assert r["created"] == 1 and r["red_rows"] == 2
+        v = next(x for x in get(p("/api/vouchers?period=2033-06"))[1]["rows"]
+                 if x["source_no"] == "记-206")
+        detail = get(p(f"/api/vouchers/{v['id']}"))[1]
+        cash = next(x for x in detail["entries"] if x["account_code"] == "1001")
+        bank = next(x for x in detail["entries"] if x["account_code"] == "1002")
+        assert cash["debit"] == 0 and cash["credit"] == -5
+        assert bank["debit"] == -5 and bank["credit"] == 0
+
+    def test_同一行借贷同时有值报错(self):
+        data = xlsx([
+            row("记-207", "2033-06-11", "双边有值", "1001", "库存现金", 10, -5),
+            row("记-207", "2033-06-11", "双边有值", "1002", "银行存款", -5, 10),
         ])
         st, r = upload(p("/api/data/import/vouchers"), "bad5.xlsx", data)
-        assert st == 400
+        assert st == 400 and "借方与贷方金额不能同时有值" in r["detail"]

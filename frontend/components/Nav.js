@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import BookSwitcher from "@/components/BookSwitcher";
+import { useSelMonth } from "@/lib/api";
 
 const items = [
   { href: "/", label: "仪表盘", icon: "📊" },
@@ -17,11 +18,21 @@ const items = [
 
 export default function Nav() {
   const pathname = usePathname();
+  const [month, setMonth] = useSelMonth();
   return (
     <aside className="w-56 shrink-0 bg-slate-900 text-slate-200 flex flex-col">
       <div className="px-5 py-5 border-b border-slate-800">
         <div className="text-lg font-bold text-white tracking-wide">财务报税系统</div>
         <div className="text-xs text-slate-400 mt-1">小企业会计准则 · SQLite</div>
+      </div>
+      <div className="px-5 py-3 border-b border-slate-800">
+        <div className="text-xs text-slate-400 mb-1.5">选中月份（各页面同步）</div>
+        <input
+          type="month"
+          className="input w-full"
+          value={month}
+          onChange={(e) => setMonth(e.target.value)}
+        />
       </div>
       <BookSwitcher />
       <nav className="flex-1 py-3">

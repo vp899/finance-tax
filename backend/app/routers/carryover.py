@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from ..database import get_db
-from ..models import FixedAsset, IntangibleAsset, Period
+from ..models import FixedAsset, IntangibleAsset
 from ..services import ledger as L
 from ..services import carryover as C
 
@@ -71,16 +71,56 @@ def reverse(record_id: int, db: Session = Depends(get_db)):
 
 @router.get("/periods")
 def periods(db: Session = Depends(get_db)):
-    rows = [{"period": p.period, "status": p.status, "closed_at": p.closed_at}
-            for p in db.query(Period).order_by(Period.period.desc()).all()]
-    return rows
+    """月份结账状态列表（含每月凭证张数/借贷合计/草稿/导入数据）"""
+    return C.list_periods(db)
+
+
+@router.post("/periods/sync")
+def periods_sync(body: dict = None, db: Session = Depends(get_db)):
+    """同步月份数据：为指定（或全部有数据的）月份补齐会计期间记录并刷新统计"""
+    body = body or {}
+    try:
+        res = C.sync_periods(db, body.get("periods"))
+        db.commit()
+        return res
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(400, str(e))
 
 
 @router.post("/close")
 def close(body: dict, db: Session = Depends(get_db)):
     period = str(body.get("period") or "")
     try:
-        res = C.close_period(db, period, force=bool(body.get("force")))
+        res = C.close_period(db, period, force=bool(body.get("force")),
+                             skip_checks=bool(body.get("skip_checks")),
+                             note=str(body.get("note") or ""))
+        db.commit()
+        return res
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(400, str(e))
+
+
+@router.post("/close-batch")
+def close_batch(body: dict, db: Session = Depends(get_db)):
+    """月份批量结账（历史导入数据可在其它系统已结账，可跳过全部检查）"""
+    try:
+        res = C.close_batch(db, [str(p or "") for p in (body.get("periods") or [])],
+                            skip_checks=bool(body.get("skip_checks")),
+                            note=str(body.get("note") or ""))
+        db.commit()
+        return res
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(400, str(e))
+
+
+@router.post("/open-batch")
+def open_batch(body: dict, db: Session = Depends(get_db)):
+    """月份批量反结账"""
+    try:
+        res = C.open_batch(db, [str(p or "") for p in (body.get("periods") or [])])
         db.commit()
         return res
     except ValueError as e:

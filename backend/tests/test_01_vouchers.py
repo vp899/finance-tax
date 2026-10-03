@@ -45,11 +45,16 @@ class TestCreateValidation:
         st, r = post("/api/vouchers", {"date": "2026-06-15", "entries": []})
         assert st == 400
 
-    def test_金额为负被拒(self):
+    def test_负数金额红字原样入库(self):
+        """红字（负数）金额原样保留（其它平台的负数利息收入等记法）"""
         st, r = make_voucher("2026-06-15", [
-            ("560204", "负数", -100, 0),
-            ("1002", "负数", 0, -100)])
-        assert st == 400
+            ("1002", "红字利息收入", 1.01, 0),
+            ("560301", "红字利息收入", -1.01, 0)])
+        assert st == 200
+        detail = get(f"/api/vouchers/{r['id']}")[1]
+        e = next(x for x in detail["entries"] if x["account_code"] == "560301")
+        assert e["debit"] == -1.01 and e["credit"] == 0
+        assert detail["total_debit"] == 0 and detail["total_credit"] == 0
 
     def test_同一行借贷同时有值被拒(self):
         st, r = make_voucher("2026-06-15", [
