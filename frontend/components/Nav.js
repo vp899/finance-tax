@@ -29,10 +29,11 @@ export default function Nav() {
         <div className="text-xs text-slate-400 mb-1.5">选中月份（各页面同步）</div>
         <input
           type="month"
-          className="input w-full"
+          className="input-month-dark w-full"
           value={month}
           onChange={(e) => setMonth(e.target.value)}
         />
+        <div className="text-[11px] text-slate-500 mt-1.5">当前：{month || "未选择"}</div>
       </div>
       <BookSwitcher />
       <nav className="flex-1 py-3">

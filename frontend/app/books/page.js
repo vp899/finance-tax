@@ -77,10 +77,23 @@ function useAccounts() {
 }
 
 /* ---------------- 总账 / 余额表 ---------------- */
+const HIDE_ZERO_KEY = "ft.hideZeroBalance";
+
+function hideZeroDefault() {
+  if (typeof window === "undefined") return true;
+  return window.localStorage.getItem(HIDE_ZERO_KEY) !== "0"; // 默认隐藏全零科目
+}
+
+function isAllZero(r) {
+  return ![r.opening_debit, r.opening_credit, r.period_debit, r.period_credit,
+           r.closing_debit, r.closing_credit].some((v) => Math.abs(Number(v) || 0) >= 0.005);
+}
+
 function LedgerTable({ kind, title }) {
   const [range, setRange] = useState(defaultRange());
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
+  const [hideZero, setHideZero] = useState(hideZeroDefault);
 
   const load = useCallback(() => {
     setError("");
@@ -90,14 +103,36 @@ function LedgerTable({ kind, title }) {
   }, [kind, range]);
   useEffect(load, [load]);
 
-  const rows = Array.isArray(data?.rows) ? data.rows : [];
+  const allRows = Array.isArray(data?.rows) ? data.rows : [];
+  const isBalance = kind === "balance-table";
+  const zeroRows = isBalance ? allRows.filter(isAllZero) : [];
+  const rows = isBalance && hideZero ? allRows.filter((r) => !isAllZero(r)) : allRows;
   const { fp, tp } = rangeFromTo(range);
+  const toggleHideZero = () => {
+    const next = !hideZero;
+    setHideZero(next);
+    if (typeof window !== "undefined") window.localStorage.setItem(HIDE_ZERO_KEY, next ? "1" : "0");
+  };
 
   return (
     <div className="card">
       <Bar>
         <PeriodRange value={range} onChange={setRange} />
         <button className="btn-ghost" onClick={load}>查询</button>
+        {isBalance && (
+          <label className="inline-flex items-center gap-1.5 text-sm text-slate-600 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-400"
+              checked={hideZero}
+              onChange={toggleHideZero}
+            />
+            隐藏全零科目
+            {hideZero && zeroRows.length > 0 && (
+              <span className="text-xs text-slate-400">已隐藏 {zeroRows.length} 个</span>
+            )}
+          </label>
+        )}
         <div className="flex-1" />
         <a
           className="btn-ghost"

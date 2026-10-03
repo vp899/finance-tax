@@ -709,28 +709,36 @@ def plan_exchange(db, period, cfg=None):
     """
     cfg = cfg or get_config(db)
     accs = cfg["steps"]["exchange"]["accounts"]
-    anchor = L.opening_anchor_year(db, period)
     rows = db.query(VoucherEntry, Voucher).join(
         Voucher, Voucher.id == VoucherEntry.voucher_id).filter(
         Voucher.status == "posted", VoucherEntry.currency != "CNY",
-        Voucher.period >= f"{anchor}-01", Voucher.period <= period).all()
+        Voucher.period <= period).all()
     per_acc = {}
     for e, v in rows:
         cur = db.query(Currency).filter(Currency.code == e.currency).first()
         if not cur or not cur.rate:
             continue
-        agg = per_acc.setdefault(e.account_id, {"orig": 0.0, "rate": cur.rate})
         rate = e.exchange_rate or 1
-        agg["orig"] = L.r2(agg["orig"] + (e.debit - e.credit) / rate)
+        agg = per_acc.setdefault(e.account_id, {"rate": cur.rate, "items": []})
+        agg["items"].append((v.period, L.r2((e.debit - e.credit) / rate)))
+        agg["rate"] = cur.rate
     diffs = []
     for aid, agg in per_acc.items():
         a = db.query(Account).get(aid)
         if not a:
             continue
-        # 原币余额 = 期初数量 + 外币分录折算；本位币余额 = 全部账面余额（含期初与已调整额）
+        # 逐科目锚定：期初数量已含锚定年度之前的余额，故只累计锚定年度起的外币分录
+        anchor = L.account_opening_anchor(db, aid, period)
+        start = f"{anchor}-01" if anchor else None
+        orig = 0.0
+        for p, delta in agg["items"]:
+            if start and p < start:
+                continue
+            orig = L.r2(orig + delta)
         ob = db.query(OpeningBalance).filter(
-            OpeningBalance.account_id == aid, OpeningBalance.year == anchor).first()
-        orig = L.r2(agg["orig"] + (ob.quantity if ob else 0))
+            OpeningBalance.account_id == aid, OpeningBalance.year == (anchor or "")).first() \
+            if anchor else None
+        orig = L.r2(orig + (ob.quantity if ob else 0))
         if abs(orig) < 0.005:
             continue
         cny = L.signed_balance(db, [aid], to_period=period)

@@ -474,12 +474,16 @@ class TestTrialBalanceRobust:
         assert delete(f"/api/accounts/{r['id']}")[0] == 200
 
     def test_期初不平衡不能保存(self):
+        before = get("/api/accounts/openings/list?year=2036")[1]
         st, _ = put("/api/accounts/openings/save", {
             "year": "2036",
             "rows": [{"account_id": acc_id("1002"), "debit": 100}]})
         assert st == 400
         rows = get("/api/accounts/openings/list?year=2036")[1]
-        assert rows["total_debit"] == 0
+        # 保存失败不留下脏数据：与保存前完全一致（未录入期初的年度自动按上期连续累计）
+        assert rows["total_debit"] == before["total_debit"]
+        assert rows["total_credit"] == before["total_credit"]
+        assert rows["balanced"] == before["balanced"]
 
 
 class TestCrossYearAnchor:

@@ -29,9 +29,19 @@ html, body {
     @apply px-2.5 py-1.5 text-xs;
   }
   .input {
-    @apply w-full px-3 py-2 rounded-lg border border-slate-300 text-sm
+    @apply w-full px-3 py-2 rounded-lg border border-slate-300 text-sm text-slate-800
       focus:outline-none focus:ring-2 focus:ring-brand-300 focus:border-brand-400
       bg-white;
+  }
+  /* 深色侧边栏里的月份选择器：高对比、选中月份醒目可读 */
+  .input-month-dark {
+    @apply w-full px-3 py-2 rounded-lg border border-brand-400 text-sm font-medium
+      text-slate-900 bg-white focus:outline-none focus:ring-2 focus:ring-brand-300;
+    box-shadow: 0 0 0 3px rgba(53, 99, 244, 0.25);
+  }
+  .input-month-dark::-webkit-calendar-picker-indicator {
+    opacity: 0.75;
+    cursor: pointer;
   }
   .label {
     @apply block text-xs font-medium text-slate-500 mb-1;

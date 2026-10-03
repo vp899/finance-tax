@@ -9,7 +9,7 @@
   其中 未分配利润 = 3103+3104(贷方) + 未结转本年损益净额，保证任何结转状态下资产负债表均平衡。
 """
 from decimal import Decimal, ROUND_HALF_UP
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from ..models import (
@@ -103,19 +103,36 @@ def _entry_sums(db: Session, ids, from_period=None, to_period=None, period=None,
     return r2(d or 0), r2(c or 0)
 
 
-def opening_anchor_year(db: Session, before_period: str) -> str:
-    """期初锚定年度：取 ≤ before_period 年份的最近一个已录入期初的年度。
+def _years_with_opening(db: Session, before_period: str, nonzero_only: bool = False):
+    """≤ before_period 年度中已有期初数据的年度（升序）"""
+    year = before_period[:4]
+    q = db.query(OpeningBalance.year).filter(OpeningBalance.year <= year)
+    if nonzero_only:
+        q = q.filter(or_(OpeningBalance.debit != 0, OpeningBalance.credit != 0,
+                         OpeningBalance.quantity != 0))
+    return sorted({r[0] for r in q.distinct()})
 
+
+def opening_anchor_year(db: Session, before_period: str) -> str:
+    """期初锚定年度：取 ≤ before_period 年份的最近一个“已录入期初”的年度。
+
+    - “已录入”= 该年度存在非零期初行；只有全零期初行的年度视为年期初尚未更新，
+      自动忽略并继续锚定到最近有期初的年度，跨年连续累计（避免新年度余额被错误清零）。
     - 正常逐年录入期初时，锚定年度 = 当前年度（与旧行为一致）。
-    - 若新年度尚未录入期初（期初自动结转的场景），锚定到最近有期初的年度，
-      发生额从锚定年度年初连续累计，避免新年度余额被错误清零。
+    - 新年度录入了期初即以该年度为准（重新建账口径），全部科目同基准，
+      保证资产负债表在任意年度都恒平。
     """
     year = before_period[:4]
-    row = (db.query(OpeningBalance.year)
-           .filter(OpeningBalance.year <= year)
-           .order_by(OpeningBalance.year.desc())
-           .first())
-    return row[0] if row else year
+    nz = _years_with_opening(db, before_period, nonzero_only=True)
+    if nz:
+        return nz[-1]
+    rows = _years_with_opening(db, before_period)
+    return rows[-1] if rows else year
+
+
+def account_opening_anchor(db: Session, account_id: int, before_period: str) -> str:
+    """科目的期初锚定年度（与 opening_sums 同基准）"""
+    return opening_anchor_year(db, before_period)
 
 
 def net_side(od: float, oc: float):
@@ -125,7 +142,10 @@ def net_side(od: float, oc: float):
 
 
 def opening_sums(db: Session, ids, before_period: str):
-    """before_period 之前的期初 + 发生额（跨年锚定到最近有期初的年度）"""
+    """before_period 之前的期初 + 发生额（跨年锚定到最近已录入期初的年度）"""
+    ids = list(dict.fromkeys(ids or []))
+    if not ids:
+        return 0.0, 0.0
     anchor = opening_anchor_year(db, before_period)
     ob = db.query(
         func.coalesce(func.sum(OpeningBalance.debit), 0.0),
@@ -173,13 +193,9 @@ def signed_balance(db: Session, ids, to_period: str) -> float:
 
 
 def all_time_balance(db: Session, ids) -> float:
-    """全部期初 + 全部发生额的净额（借方为正）"""
-    ob = db.query(
-        func.coalesce(func.sum(OpeningBalance.debit), 0.0),
-        func.coalesce(func.sum(OpeningBalance.credit), 0.0),
-    ).filter(OpeningBalance.account_id.in_(ids)).one()
-    d, c = _entry_sums(db, ids)
-    return r2((ob[0] or 0) + d - (ob[1] or 0) - c)
+    """全部期初 + 全部发生额的净额（借方为正），与账簿期末余额同口径"""
+    d, c = opening_sums(db, ids, "9999-12")
+    return r2(d - c)
 
 
 # ---------------- 账簿 ----------------
@@ -355,6 +371,47 @@ def _code_net(db: Session, code: str, to_period: str = None, from_period: str = 
                            exclude_kind=exclude_kind)
         return r2(d - c)
     return signed_balance(db, ids, to_period=to_period)
+
+
+def _accounts_with_own_data(db: Session) -> set:
+    """自身有期初或发生额的科目（含被直接记账的非末级科目）"""
+    ids = {r[0] for r in db.query(OpeningBalance.account_id).distinct()}
+    ids |= {r[0] for r in db.query(VoucherEntry.account_id).distinct()}
+    return ids
+
+
+def pl_net_total(db: Session, to_period: str = None, before_period: str = None) -> float:
+    """损益类科目净额合计（借方为正）= 尚未结转的经营成果
+
+    口径：末级科目 + 历史上被直接记账/录入期初的非末级损益科目（只计自身发生额，
+    不重复上卷）；已结转部分经结转损益凭证进入 3103/3104，故此值即“未结转本年损益”。
+    可跨年累计：第二年及以后，未结转的以前年度损益仍应计入未分配利润。
+    """
+    own = _accounts_with_own_data(db)
+    total = 0.0
+    for a in db.query(Account).filter(Account.category.in_(("income", "expense"))).all():
+        if not (a.is_leaf or a.id in own):
+            continue
+        if before_period is not None:
+            d, c = opening_sums(db, [a.id], before_period)
+            total = r2(total + d - c)
+        else:
+            total = r2(total + signed_balance(db, [a.id], to_period=to_period))
+    return total
+
+
+def undistributed_profit(db: Session, to_period: str = None, before_period: str = None) -> float:
+    """未分配利润（贷方为正）= 3103/3104 余额 + 未结转本年损益
+
+    任何结转状态下都成立，且跨年连续：年初未分配利润 = 上年末未分配利润。
+    """
+    ids = account_ids_for(db, "3103") + account_ids_for(db, "3104")
+    if before_period is not None:
+        d, c = opening_sums(db, ids, before_period)
+        bal = r2(d - c)
+    else:
+        bal = signed_balance(db, ids, to_period=to_period)
+    return r2(-(bal + pl_net_total(db, to_period=to_period, before_period=before_period)))
 
 
 def _leaf_sum(db: Session, predicate, to_period=None, from_period=None,
@@ -549,14 +606,9 @@ def _line_value(db: Session, codes, to_period=None, from_period=None, beginning=
     if codes == ["__other_equity__"]:
         return r2(extra)
     if codes == ["__undistributed__"]:
-        ids = account_ids_for(db, "3103") + account_ids_for(db, "3104")
         if beginning:
-            d, c = opening_sums(db, ids, f"{to_period[:4]}-01")
-            return r2(r2(-(d - c)) + extra)
-        val = r2(-signed_balance(db, ids, to_period=to_period))
-        if from_period is None and to_period:
-            val = r2(val + profit_net_ytd(db, to_period))
-        return r2(val + extra)
+            return r2(undistributed_profit(db, before_period=f"{to_period[:4]}-01") + extra)
+        return r2(undistributed_profit(db, to_period=to_period) + extra)
     total = r2(extra)
     for code in codes:
         if beginning:
@@ -593,7 +645,11 @@ def _bs_extras(db: Session, period: str, year: str):
     end = {v: 0.0 for v in names.values()}
     beg = {v: 0.0 for v in names.values()}
     year_start = f"{year}-01"
-    for a in db.query(Account).filter(Account.is_leaf == 1).all():
+    own = _accounts_with_own_data(db)
+    for a in db.query(Account).all():
+        # 末级科目 + 历史上被直接记账的非末级科目（只计自身发生额，不重复上卷）
+        if not (a.is_leaf or a.id in own):
+            continue
         if a.id in covered or a.category in ("income", "expense"):
             continue
         name = names.get(a.category)
@@ -657,114 +713,206 @@ def balance_sheet(db: Session, period: str):
             "liability_equity_total": r2(vals_end["负债合计"] + vals_end["所有者权益合计"])}
 
 
-CASHFLOW_LINES = [
-    ("item", "销售商品、提供劳务收到的现金", "101"),
-    ("item", "收到的税费返还", "102"),
-    ("item", "收到其他与经营活动有关的现金", "103"),
-    ("sub", "经营活动现金流入小计", ["101", "102", "103"], "in"),
-    ("item", "购买商品、接受劳务支付的现金", "201"),
-    ("item", "支付给职工以及为职工支付的现金", "202"),
-    ("item", "支付的各项税费", "203"),
-    ("item", "支付其他与经营活动有关的现金", "204"),
-    ("sub", "经营活动现金流出小计", ["201", "202", "203", "204"], "out"),
-    ("calc", "经营活动产生的现金流量净额", "op_net"),
-    ("item", "收回投资收到的现金", "301"),
-    ("item", "取得投资收益收到的现金", "302"),
-    ("item", "处置固定资产、无形资产和其他非流动资产收回的现金净额", "303"),
-    ("item", "处置子公司及其他营业单位收到的现金净额", "304"),
-    ("item", "收到其他与投资活动有关的现金", "305"),
-    ("sub", "投资活动现金流入小计", ["301", "302", "303", "304", "305"], "in"),
-    ("item", "购建固定资产、无形资产和其他非流动资产支付的现金", "401"),
-    ("item", "投资支付的现金", "402"),
-    ("item", "取得子公司及其他营业单位支付的现金净额", "403"),
-    ("item", "支付其他与投资活动有关的现金", "404"),
-    ("sub", "投资活动现金流出小计", ["401", "402", "403", "404"], "out"),
-    ("calc", "投资活动产生的现金流量净额", "inv_net"),
-    ("item", "吸收投资收到的现金", "501"),
-    ("item", "取得借款收到的现金", "502"),
-    ("item", "收到其他与筹资活动有关的现金", "503"),
-    ("sub", "筹资活动现金流入小计", ["501", "502", "503"], "in"),
-    ("item", "偿还债务支付的现金", "601"),
-    ("item", "分配股利、利润或偿付利息支付的现金", "602"),
-    ("item", "支付其他与筹资活动有关的现金", "603"),
-    ("sub", "筹资活动现金流出小计", ["601", "602", "603"], "out"),
-    ("calc", "筹资活动产生的现金流量净额", "fin_net"),
-    ("calc", "现金及现金等价物净增加额", "net_inc"),
-    ("calc", "加：期初现金及现金等价物余额", "begin_bal"),
-    ("calc", "期末现金及现金等价物余额", "end_bal"),
+# 现金流量表表样（与其它平台逐项可比）
+# 每个小计区组：category / direction / 小计行名 / 折入未识别项目的“其他”行名 / 明细行
+CASHFLOW_SECTIONS = [
+    {"category": "operating", "direction": "in", "subtotal": "经营活动现金流入小计",
+     "other": "收到其他与经营活动有关的现金", "items": [
+        ("销售商品、提供劳务收到的现金", ["101"], "D"),
+        ("收到的税费返还", ["102"], "D"),
+        ("收到其他与经营活动有关的现金", ["103"], "D"),
+    ]},
+    {"category": "operating", "direction": "out", "subtotal": "经营活动现金流出小计",
+     "other": "支付其他与经营活动有关的现金", "items": [
+        ("购买商品、接受劳务支付的现金", ["201"], "C"),
+        ("支付给职工以及为职工支付的现金", ["202"], "C"),
+        ("支付的各项税费", ["203"], "C"),
+        ("支付其他与经营活动有关的现金", ["204"], "C"),
+    ]},
+    {"category": "investing", "direction": "in", "subtotal": "投资活动现金流入小计",
+     "other": "收到其他与投资活动有关的现金", "items": [
+        ("收回投资收到的现金", ["301"], "D"),
+        ("取得投资收益收到的现金", ["302"], "D"),
+        ("处置固定资产、无形资产和其他非流动资产收回的现金净额", ["303"], "D"),
+        ("处置子公司及其他营业单位收到的现金净额", ["304"], "D"),
+        ("收到其他与投资活动有关的现金", ["305"], "D"),
+    ]},
+    {"category": "investing", "direction": "out", "subtotal": "投资活动现金流出小计",
+     "other": "支付其他与投资活动有关的现金", "items": [
+        ("购建固定资产、无形资产和其他非流动资产支付的现金", ["401"], "C"),
+        ("投资支付的现金", ["402"], "C"),
+        ("取得子公司及其他营业单位支付的现金净额", ["403"], "C"),
+        ("支付其他与投资活动有关的现金", ["404"], "C"),
+    ]},
+    {"category": "financing", "direction": "in", "subtotal": "筹资活动现金流入小计",
+     "other": "收到其他与筹资活动有关的现金", "items": [
+        ("吸收投资收到的现金", ["501"], "D"),
+        ("取得借款收到的现金", ["502"], "D"),
+        ("收到其他与筹资活动有关的现金", ["503"], "D"),
+    ]},
+    {"category": "financing", "direction": "out", "subtotal": "筹资活动现金流出小计",
+     "other": "支付其他与筹资活动有关的现金", "items": [
+        ("偿还债务支付的现金", ["601"], "C"),
+        ("分配股利、利润或偿付利息支付的现金", ["602", "604", "605"], "C"),
+        ("支付其他与筹资活动有关的现金", ["603"], "C"),
+    ]},
 ]
+
+CASHFLOW_NET_NAMES = {
+    "operating": "经营活动产生的现金流量净额",
+    "investing": "投资活动产生的现金流量净额",
+    "financing": "筹资活动产生的现金流量净额",
+}
+
+CASHFLOW_END_NAMES = {
+    "net_inc": "现金及现金等价物净增加额",
+    "begin": "加：期初现金及现金等价物余额",
+    "end": "期末现金及现金等价物余额",
+}
 
 CASH_CODES = ["1001", "1002", "1012"]
 
 
-def cashflow_amounts(db: Session, from_period: str, to_period: str):
-    """按现金流量项目汇总：(流入, 流出)"""
+def _cash_ids(db: Session) -> list:
     ids = []
     for c in CASH_CODES:
         ids.extend(account_ids_for(db, c, rollup=True))
-    result = {}
+    return ids
+
+
+def cashflow_bucket(code: str, meta: dict, inflow: float, outflow: float) -> tuple:
+    """现金流量项目归属：(类别, 流入/流出)；表样外项目按编码与毛额推断"""
+    cat, dirn = meta.get(code, (None, None))
+    if not cat:
+        head = (code or "")[:1]
+        cat = ("operating" if head in ("1", "2")
+               else "investing" if head in ("3", "4") else "financing")
+        dirn = "C" if outflow > inflow else "D"
+    if dirn == "C":
+        return cat, "out"
+    return cat, "in"
+
+
+def cashflow_row_of(code: str, meta: dict, inflow: float, outflow: float) -> str:
+    """表样外的现金流量项目 → 折入同类别同方向的“其他”行（保证不漏项）"""
+    cat, want = cashflow_bucket(code, meta, inflow, outflow)
+    for sec in CASHFLOW_SECTIONS:
+        if sec["category"] == cat and sec["direction"] == want:
+            return sec["other"]
+    return CASHFLOW_SECTIONS[0]["other"]
+
+
+def _cashflow_code_of(db: Session, contra: list, acc_map: dict, entry) -> str:
+    """未标现金流量项目的现金分录：按金额最大的对方科目对照，否则按方向兑底
+
+    与凭证录入的自动对照（vouchers.auto_cashflow）同口径，保证导入的历史凭证
+    在现金流量表里与其它平台分类一致。
+    """
+    from .vouchers import find_cashflow_code
+    for ce in contra:
+        acc = acc_map.get(ce.account_id)
+        if not acc:
+            continue
+        code = find_cashflow_code(db, acc)
+        if code:
+            return code
+    net = r2((entry.debit or 0) - (entry.credit or 0))
+    return "204" if net < 0 else "103"
+
+
+def cashflow_amounts(db: Session, from_period: str, to_period: str):
+    """按现金流量项目汇总现金及现金等价物发生额：{项目编码: (流入, 流出)}
+
+    - 只统计现金类科目（1001/1002/1012 及下级）上的分录；整张凭证都是现金科目的
+      内部划转（提现/存现/转户）不产生现金流量，直接跳过（否则流入流出虚增）。
+    - 未标现金流量项目的分录按对方科目对照表自动归类，无法确定时按方向兑底，
+      保证每笔现金流动都被归类、不遗漏（否则表内合计对不上账面现金）。
+    """
+    cash_ids = _cash_ids(db)
+    if not cash_ids:
+        return {}
+    cash_set = set(cash_ids)
     entries = db.query(VoucherEntry, Voucher).join(
         Voucher, Voucher.id == VoucherEntry.voucher_id
     ).filter(
-        VoucherEntry.account_id.in_(ids), Voucher.status == "posted",
+        VoucherEntry.account_id.in_(cash_ids), Voucher.status == "posted",
         Voucher.period >= from_period, Voucher.period <= to_period,
     ).all()
-    for e, v in entries:
-        code = e.cashflow_code or "103"
-        inflow, outflow = result.get(code, (0.0, 0.0))
-        result[code] = (r2(inflow + e.debit), r2(outflow + e.credit))
+    if not entries:
+        return {}
+    vids = {v.id for _e, v in entries}
+    by_voucher = {}
+    for e in db.query(VoucherEntry).filter(VoucherEntry.voucher_id.in_(vids)).all():
+        by_voucher.setdefault(e.voucher_id, []).append(e)
+    acc_map = {a.id: a for a in db.query(Account).all()}
+    result = {}
+    for es in by_voucher.values():
+        cash_es = [e for e in es if e.account_id in cash_set]
+        if not cash_es:
+            continue
+        contra = [e for e in es if e.account_id not in cash_set]
+        if not contra:
+            continue  # 现金内部划转，不产生现金流量
+        contra.sort(key=lambda e: -abs(r2((e.debit or 0) - (e.credit or 0))))
+        for e in cash_es:
+            code = (e.cashflow_code or "").strip() or _cashflow_code_of(db, contra, acc_map, e)
+            inflow, outflow = result.get(code, (0.0, 0.0))
+            result[code] = (r2(inflow + (e.debit or 0)), r2(outflow + (e.credit or 0)))
     return result
 
 
 def cashflow_statement(db: Session, from_period: str, to_period: str):
-    amounts = cashflow_amounts(db, from_period, to_period)
+    """现金流量表：每笔现金流动都被归类，合计恒等于账面现金变动
 
-    def item_val(code):
+    - 小计/净额按带符号口径合计（负数即红字冲回），不做绝对值截断，
+      故 经营+投资+筹资净额 = 现金及现金等价物净增加额 = 账面现金变动；
+    - difference = 表内期末现金 − 账面现金，正常应为 0。
+    """
+    amounts = cashflow_amounts(db, from_period, to_period)
+    meta = {c.code: (c.category, c.direction) for c in db.query(CashflowItem).all()}
+    row_of = {}
+    for sec in CASHFLOW_SECTIONS:
+        for name, codes, _d in sec["items"]:
+            for c in codes:
+                row_of.setdefault(c, name)
+    for code, (inflow, outflow) in amounts.items():
+        if code not in row_of:
+            row_of[code] = cashflow_row_of(code, meta, inflow, outflow)
+
+    def code_net(code):
         inflow, outflow = amounts.get(code, (0.0, 0.0))
         return r2(inflow - outflow)  # 净流入为正
 
-    rows, store = [], {}
-    item_dir = {c.code: c.direction for c in db.query(CashflowItem).all()}
-    for entry in CASHFLOW_LINES:
-        kind, name = entry[0], entry[1]
-        if kind == "item":
-            v = item_val(entry[2])
-            if item_dir.get(entry[2], "D") == "C":
-                v = r2(-v)  # 流出类项目：支付额为正
+    rows, store, section_net = [], {}, {}
+    for sec in CASHFLOW_SECTIONS:
+        total = 0.0
+        for name, _codes, row_dir in sec["items"]:
+            net = r2(sum(code_net(c) for c, r in row_of.items() if r == name))
+            v = net if row_dir == "D" else r2(-net)  # 流出类项目：支付额为正
             rows.append({"name": name, "amount": v, "type": "line"})
-        elif kind == "sub":
-            v = (r2(sum(max(item_val(c), 0.0) for c in entry[2])) if entry[3] == "in"
-                 else r2(sum(max(-item_val(c), 0.0) for c in entry[2])))
-            rows.append({"name": name, "amount": v, "type": "sub"})
-        else:
-            key = entry[2]
-            if key == "op_net":
-                v = r2(store["经营活动现金流入小计"] - store["经营活动现金流出小计"])
-            elif key == "inv_net":
-                v = r2(store["投资活动现金流入小计"] - store["投资活动现金流出小计"])
-            elif key == "fin_net":
-                v = r2(store["筹资活动现金流入小计"] - store["筹资活动现金流出小计"])
-            elif key == "net_inc":
-                v = r2(store["经营活动产生的现金流量净额"]
-                       + store["投资活动产生的现金流量净额"]
-                       + store["筹资活动产生的现金流量净额"])
-            elif key == "begin_bal":
-                ids = []
-                for c in CASH_CODES:
-                    ids.extend(account_ids_for(db, c, rollup=True))
-                d, c = opening_sums(db, ids, from_period)
-                v = r2(d - c)
-            else:
-                v = r2(store["加：期初现金及现金等价物余额"] + store["现金及现金等价物净增加额"])
-            rows.append({"name": name, "amount": v, "type": "calc"})
-        store[name] = rows[-1]["amount"]
-    ids = []
-    for c in CASH_CODES:
-        ids.extend(account_ids_for(db, c, rollup=True))
-    book_end = signed_balance(db, ids, to_period=to_period)
+            store[name] = v
+            total = r2(total + v)
+        rows.append({"name": sec["subtotal"], "amount": total, "type": "sub"})
+        store[sec["subtotal"]] = total
+        section_net[(sec["category"], sec["direction"])] = total
+        if sec["direction"] == "out":
+            v = r2(section_net[(sec["category"], "in")] - total)
+            rows.append({"name": CASHFLOW_NET_NAMES[sec["category"]], "amount": v,
+                         "type": "calc"})
+            store[CASHFLOW_NET_NAMES[sec["category"]]] = v
+
+    net_inc = r2(sum(store[CASHFLOW_NET_NAMES[c]] for c in ("operating", "investing", "financing")))
+    rows.append({"name": CASHFLOW_END_NAMES["net_inc"], "amount": net_inc, "type": "calc"})
+    cash_ids = _cash_ids(db)
+    d, c = opening_sums(db, cash_ids, from_period)
+    begin = r2(d - c)
+    rows.append({"name": CASHFLOW_END_NAMES["begin"], "amount": begin, "type": "calc"})
+    end = r2(begin + net_inc)
+    rows.append({"name": CASHFLOW_END_NAMES["end"], "amount": end, "type": "calc"})
+    book_end = signed_balance(db, cash_ids, to_period=to_period)
     return {"rows": rows, "from_period": from_period, "to_period": to_period,
-            "book_ending_cash": book_end,
-            "balanced": abs(book_end - store["期末现金及现金等价物余额"]) < 0.01}
+            "book_ending_cash": book_end, "difference": r2(end - book_end),
+            "balanced": abs(end - book_end) < 0.01}
 
 
 def voucher_summary(db: Session, from_period: str, to_period: str):

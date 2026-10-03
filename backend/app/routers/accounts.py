@@ -282,32 +282,45 @@ def set_opening_year(body: dict, db: Session = Depends(get_db)):
     return {"ok": True, "opening_year": year}
 
 
-@router.get("/openings/list")
-def list_openings(year: str = None, db: Session = Depends(get_db)):
-    year = str(year or "").strip() or _default_opening_year(db)
+def _opening_rows(db: Session, year: str) -> list:
+    """年度科目期初行（与账簿余额同口径）：
+
+    - 年度已录入期初（存在非零期初行）时 → 以录入值为准（含 0，尊重清零）；
+    - 年度尚未录入期初（含只写下全 0 行的“年期初未更新”情况）时 →
+      自动按最近已录入期初的年度连续累计，carried=True，使“年期初”随历史数据自动更新。
+    """
+    anchor = L.opening_anchor_year(db, f"{year}-01")
     obs = {o.account_id: o for o in db.query(OpeningBalance).filter(OpeningBalance.year == year).all()}
-    rows = []
-    td = tc = 0.0
     # 末级科目 + 历史上已录入期初的非末级科目（可修改/清零，避免脏数据无法修正）
     accounts = [a for a in db.query(Account).filter(Account.is_leaf == 1).order_by(Account.code).all()]
     for a in db.query(Account).filter(Account.is_leaf == 0).order_by(Account.code).all():
         if a.id in obs:
             accounts.append(a)
+    rows = []
     for a in accounts:
         o = obs.get(a.id)
-        d = L.r2(o.debit) if o else 0.0
-        c = L.r2(o.credit) if o else 0.0
-        td, tc = L.r2(td + d), L.r2(tc + c)
+        od, oc = L.opening_sums(db, [a.id], f"{year}-01")
+        d, c = L.net_side(od, oc)  # 余额口径单边列示
         rows.append({"account_id": a.id, "code": a.code, "name": a.name,
                      "direction": a.direction, "debit": d, "credit": c,
-                     "is_leaf": bool(a.is_leaf),
+                     "is_leaf": bool(a.is_leaf), "carried": anchor != year,
                      "currency": (o.currency if o else a.currency) or "CNY",
                      "orig_amount": L.r2(o.orig_amount) if o else 0.0,
                      "ytd_debit": L.r2(o.ytd_debit) if o else 0.0,
                      "ytd_credit": L.r2(o.ytd_credit) if o else 0.0,
                      "quantity": o.quantity if o else 0})
+    return rows
+
+
+@router.get("/openings/list")
+def list_openings(year: str = None, db: Session = Depends(get_db)):
+    """科目期初列表：新年度尚未录入期初时，自动展示连续累计的年期初（carried=True）"""
+    year = str(year or "").strip() or _default_opening_year(db)
+    rows = _opening_rows(db, year)
+    td = L.r2(sum(r["debit"] for r in rows))
+    tc = L.r2(sum(r["credit"] for r in rows))
     return {"year": year, "rows": rows, "total_debit": td, "total_credit": tc,
-            "balanced": abs(td - tc) < 0.005,
+            "balanced": abs(td - tc) < 0.005, "anchor_year": L.opening_anchor_year(db, f"{year}-01"),
             "opening_year": _default_opening_year(db),
             "years": sorted({r[0] for r in db.query(OpeningBalance.year).distinct().all()} | {year})}
 
@@ -356,10 +369,10 @@ def save_openings(body: dict, db: Session = Depends(get_db)):
         if r.get("currency"):
             o.currency = str(r["currency"])
     db.flush()
-    # 全年合并口径校验试算平衡
+    # 全年合并口径校验试算平衡（含未录入科目的自动年期初，与列表展示一致）
     total_d = total_c = 0.0
-    for o in db.query(OpeningBalance).filter(OpeningBalance.year == year).all():
-        total_d, total_c = L.r2(total_d + (o.debit or 0)), L.r2(total_c + (o.credit or 0))
+    for r in _opening_rows(db, year):
+        total_d, total_c = L.r2(total_d + r["debit"]), L.r2(total_c + r["credit"])
     if abs(total_d - total_c) >= 0.005:
         db.rollback()
         raise HTTPException(

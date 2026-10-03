@@ -10,6 +10,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 from . import ledger as L
+from ..models import CashflowItem
 
 MONEY_FMT = "#,##0.00;[Red]-#,##0.00"
 THIN = Border(*[Side(style="thin", color="B0B0B0")] * 4)
@@ -213,6 +214,17 @@ def _net_of(store, names, signs):
     return L.r2(sum(v if s == "in" else -v for v, s in zip((store[n] for n in names), signs)))
 
 
+# 表样外现金流量项目的折入行（与屏幕上的现金流量表同规则）
+CF_FOLD_ROWS = {
+    ("operating", "in"): " 收到其他与经营活动有关的现金",
+    ("operating", "out"): " 支付其他与经营活动有关的现金",
+    ("investing", "in"): " 收回短期投资、长期债券投资和长期股权投资收到的现金",
+    ("investing", "out"): " 购建固定资产、无形资产和其他非流动资产支付的现金",
+    ("financing", "in"): " 取得借款收到的现金",
+    ("financing", "out"): " 分配利润支付的现金",
+}
+
+
 def _cashflow_values(db, from_p, to_p):
     """一组区间内现金流量表各行金额（本月/本年累计各自一套）"""
     amounts = L.cashflow_amounts(db, from_p, to_p)
@@ -221,9 +233,21 @@ def _cashflow_values(db, from_p, to_p):
         inflow, outflow = amounts.get(code, (0.0, 0.0))
         return L.r2(inflow - outflow)
 
-    def line_val(codes, direction):
+    # 行 → 项目编码；表样外项目折入同类别同方向的“其他”行，保证不漏项
+    row_codes = {name: list(spec[1]) for name, spec in CASHFLOW_ROWS
+                 if spec and spec[0] in ("in", "out")}
+    known = {c for codes in row_codes.values() for c in codes}
+    meta = {c.code: (c.category, c.direction) for c in db.query(CashflowItem).all()}
+    for code, (inflow, outflow) in amounts.items():
+        if code in known:
+            continue
+        target = CF_FOLD_ROWS.get(L.cashflow_bucket(code, meta, inflow, outflow))
+        if target in row_codes:
+            row_codes[target].append(code)
+
+    def line_val(name, direction):
         total = 0.0
-        for c in codes:
+        for c in row_codes.get(name, []):
             v = item_val(c)
             total = L.r2(total + (v if direction == "in" else -v))
         return total
@@ -239,7 +263,7 @@ def _cashflow_values(db, from_p, to_p):
             continue
         kind, arg = spec
         if kind in ("in", "out"):
-            v = line_val(arg, kind)
+            v = line_val(name, kind)
         elif kind == "net":
             if arg == "op":
                 v = _net_of(store, CF_OP, CF_SIGN)

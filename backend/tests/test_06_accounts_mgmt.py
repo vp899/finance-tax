@@ -305,11 +305,15 @@ class TestOpeningsImportExport:
         assert m["120101"]["ytd_debit"] == 1000  # 本年借方累计本位币
 
     def test_导入期初不平衡被拒(self):
+        before = get("/api/accounts/openings/list?year=2039")[1]
         rows = [self._row("120101", "周转材料-测试", "借", base=500)]
         st, r = upload("/api/accounts/openings/import?year=2039", "openings.xlsx",
                        _xlsx(self.HEADERS, rows))
         assert st == 400 and "不平衡" in r["detail"]
-        assert get("/api/accounts/openings/list?year=2039")[1]["total_debit"] == 0
+        after = get("/api/accounts/openings/list?year=2039")[1]
+        # 导入失败不留下脏数据（未录入期初的年度自动按上期连续累计）
+        assert after["total_debit"] == before["total_debit"]
+        assert after["total_credit"] == before["total_credit"]
 
     def test_导入期初科目不存在报错(self):
         rows = [self._row("9999", "不存在", "借", base=100),

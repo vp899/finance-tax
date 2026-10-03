@@ -183,7 +183,7 @@ def export_detail_ledger(db: Session, account_code: str = None,
         od, oc = L.opening_sums(db, [a.id], from_period)
         if not entries and abs(od - oc) < 0.005 and not account_code:
             continue  # 全量导出时跳过无发生额且无期初的科目
-        anchor = L.opening_anchor_year(db, from_period)
+        anchor = L.account_opening_anchor(db, a.id, from_period) or from_period[:4]
         odn, ocn = L.net_side(od, oc)  # 期初按余额口径单边列示
         net = r2f(od - oc)
         seq += 1

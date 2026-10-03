@@ -209,8 +209,14 @@ function Cashflow({ quarter }) {
         <span className="text-xs text-slate-400">区间 {from} 至 {to}</span>
         {data && (
           <Badge color={data.balanced ? "green" : "red"}>
-            {data.balanced ? "✓ 与账面现金一致" : `期末差异 ${fmtMoney(data.book_ending_cash)}`}
+            {data.balanced ? "✓ 与账面现金一致" : `期末差异 ${fmtMoney(data.difference ?? 0)}`}
           </Badge>
+        )}
+        {data && !data.balanced && (
+          <span className="text-xs text-slate-500">
+            表内期末 {fmtMoney(data.rows?.find((r) => r.name === "期末现金及现金等价物余额")?.amount)}
+            　·　账面现金 {fmtMoney(data.book_ending_cash)}
+          </span>
         )}
         <div className="flex-1" />
         <a className="btn-ghost" href={downloadUrl(`/api/reports/export/cashflow?from_period=${from}&to_period=${to}`)}>

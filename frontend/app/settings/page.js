@@ -225,17 +225,29 @@ function Opening() {
         <input className="input w-24" value={year} onChange={(e) => setYear(e.target.value.replace(/[^\d]/g, "").slice(0, 4))} />
         <span className="text-sm text-slate-500">年度期初余额（借方合计 <Amt v={totalD} /> / 贷方合计 <Amt v={totalC} />）</span>
         {balanced ? <Badge color="green">试算平衡</Badge> : <Badge color="red">不平衡</Badge>}
+        {data?.anchor_year && data.anchor_year !== data.year && (
+          <span className="text-xs text-brand-700 bg-brand-50 border border-brand-200 rounded px-2 py-1">
+            年期初未录入，已按 {data.anchor_year} 年度连续累计自动更新（保存后写入本年度）
+          </span>
+        )}
         <span className="text-xs text-slate-400">可直接修改已有期初；保存时按全年合并口径校验试算平衡</span>
         <div className="flex-1" />
         <button
           className="btn-primary"
           disabled={!balanced}
           onClick={async () => {
-            const rows = Object.entries(edits).map(([id, v]) => ({
-              account_id: Number(id),
-              debit: Number(v.debit ?? 0) || 0,
-              credit: Number(v.credit ?? 0) || 0,
-            }));
+            // 写入本次修改的行 + 非零的年期初（含自动连续累计的年期初），避免只改一行导致其它科目被清零
+            const rows = (data?.rows || [])
+              .map((r) => {
+                const e = edits[r.account_id] || {};
+                return {
+                  account_id: r.account_id,
+                  debit: Number(e.debit !== undefined ? e.debit : r.debit) || 0,
+                  credit: Number(e.credit !== undefined ? e.credit : r.credit) || 0,
+                  quantity: r.quantity || 0,
+                };
+              })
+              .filter((row) => row.debit || row.credit || edits[row.account_id] !== undefined);
             try {
               await apiPut("/api/accounts/openings/save", { year, rows });
               msg.setOk("期初余额已保存");
@@ -277,6 +289,7 @@ function Opening() {
                   <td className="td">
                     {r.code} {r.name}
                     {r.is_leaf === false && <Badge color="amber">非末级</Badge>}
+                    {r.carried && <Badge color="blue">自动年期初</Badge>}
                   </td>
                   <td className="td p-1">
                     <input
