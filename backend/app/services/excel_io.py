@@ -193,6 +193,7 @@ def import_vouchers(db: Session, data: bytes):
         start, has_no_col = 1, True
     errors, created, merged, skipped = [], 0, 0, 0
     red_rows = 0
+    zero_rows = 0
     groups = {}
     last_no, last_date = "", ""
     for i in range(start, len(rows)):
@@ -206,15 +207,17 @@ def import_vouchers(db: Session, data: bytes):
         code = sheet.text(cells.get("科目编码"))
         if not date and not code and not sheet.text(cells.get("摘要")):
             continue
+        no = sheet.text(cells.get("凭证号"))
+        if not date and last_date and (not no or no == last_no):
+            date = last_date  # 日期只填在首行时向下补全（其它平台导出常见）
+        if has_no_col and not no and last_no and date == last_date:
+            no = last_no  # 凭证号只填在首行时向下补全
         if not date or not code:
             errors.append(f"第{i + 1}行：日期或科目编码为空")
             continue
         if not L.valid_period(date[:7]):
             errors.append(f"第{i + 1}行：日期无效 {date}")
             continue
-        no = sheet.text(cells.get("凭证号"))
-        if has_no_col and not no and last_no and date == last_date:
-            no = last_no  # 凭证号只填在首行时向下补全
         if has_no_col and not no:
             errors.append(f"第{i + 1}行：凭证号为空")
             continue
@@ -229,6 +232,9 @@ def import_vouchers(db: Session, data: bytes):
             attach = int(sheet.num(cells.get("附单据数"), 0))
         except ValueError as e:
             errors.append(f"第{i + 1}行：{e}")
+            continue
+        if not debit and not credit:
+            zero_rows += 1  # 零金额占位行不入库（其它平台导出常见）
             continue
         if debit < 0 or credit < 0:
             red_rows += 1  # 红字（负数）金额原样入库
@@ -329,8 +335,14 @@ def import_vouchers(db: Session, data: bytes):
             errors.append(f"凭证 {date} {no or g['vtype']}：{e}")
     if errors and created == 0 and merged == 0:
         raise ValueError("导入失败：" + "；".join(errors[:10]))
+    # 识别结转类凭证并登记结转（导入的结转损益/结转未分配利润等），
+    # 保证利润表/所得税计提/结账检查在导入数据上口径正确；可重复执行（幂等）
+    from . import carryover as C
+    sweep = C.sweep_carryover(db)
     return {"created": created, "merged": merged, "skipped": skipped,
-            "red_rows": red_rows, "errors": errors}
+            "red_rows": red_rows, "zero_rows": zero_rows,
+            "carryover_marked": sweep["marked"], "carryover_records": sweep["records"],
+            "errors": errors}
 
 
 def _line_key(entry) -> tuple:

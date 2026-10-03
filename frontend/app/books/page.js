@@ -450,8 +450,10 @@ function TrialBalance() {
             {rows.length > 0 && (
               <tr>
                 <td className="td font-semibold" colSpan={2}>合计</td>
-                <td className="td" colSpan={2} />
-                <td className="td" colSpan={2} />
+                <td className="td-num"><Amt v={data?.total_opening_debit} /></td>
+                <td className="td-num"><Amt v={data?.total_opening_credit} /></td>
+                <td className="td-num"><Amt v={data?.total_period_debit} /></td>
+                <td className="td-num"><Amt v={data?.total_period_credit} /></td>
                 <td className="td-num font-semibold"><Amt v={data?.total_debit} /></td>
                 <td className="td-num font-semibold"><Amt v={data?.total_credit} /></td>
               </tr>

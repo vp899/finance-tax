@@ -91,7 +91,10 @@ def export_book(kind: str, period: str = None, from_period: str = None,
         data = [[r["code"], r["name"], r["opening_debit"], r["opening_credit"],
                  r["period_debit"], r["period_credit"], r["debit"], r["credit"]]
                 for r in tb["rows"]]
-        data.append(["", "合计", "", "", "", "", tb["total_debit"], tb["total_credit"]])
+        data.append(["", "合计",
+                     tb.get("total_opening_debit", 0), tb.get("total_opening_credit", 0),
+                     tb.get("total_period_debit", 0), tb.get("total_period_credit", 0),
+                     tb["total_debit"], tb["total_credit"]])
         return _stream(X.export_table("试算平衡表",
                                       ["科目编码", "科目名称", "期初借方", "期初贷方",
                                        "本期借方", "本期贷方", "期末借方", "期末贷方"],

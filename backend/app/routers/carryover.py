@@ -71,8 +71,14 @@ def reverse(record_id: int, db: Session = Depends(get_db)):
 
 @router.get("/periods")
 def periods(db: Session = Depends(get_db)):
-    """月份结账状态列表（含每月凭证张数/借贷合计/草稿/导入数据）"""
+    """月份结账状态列表（含每月凭证张数/借贷合计/草稿/导入数据/结转状态）"""
     return C.list_periods(db)
+
+
+@router.get("/monthly-status")
+def monthly_status(db: Session = Depends(get_db)):
+    """每月结转状态矩阵：全部结转步骤 × 各会计期间（含导入识别的结转）"""
+    return C.monthly_status(db)
 
 
 @router.post("/periods/sync")

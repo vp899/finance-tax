@@ -6,6 +6,17 @@ import { Alert, Badge, Empty, Modal, PeriodRange, rangeQuery, Amt } from "@/comp
 
 const STATUS_COLOR = { created: "green", skipped: "amber", failed: "red", disabled: "slate" };
 
+// 结转步骤列简称（每月结转状态矩阵表头）
+const SHORT_KINDS = {
+  sales_cost: "销售成本", salary: "计提工资", pay_salary: "发放工资",
+  pay_bonus: "发放奖金", depreciation: "折旧", amortization: "无形摊销",
+  amortize_deferred: "待摊摊销", vat_free: "免增值税", accrue_bonus: "计提奖金",
+  accrue_labor: "计提劳务", pay_labor: "发放劳务", tax: "计提税金",
+  water_fund: "水利基金", stamp_tax: "印花税", union_fee: "工会经费",
+  income_tax: "所得税", exchange: "汇兑损益", profit: "结转损益",
+  retain_profit: "未分配利润",
+};
+
 export default function CarryoverPage() {
   const [period, setPeriod] = useSelMonth();
   const [op, setOp] = useState(null);
@@ -101,6 +112,8 @@ export default function CarryoverPage() {
           setError(errMsg || "");
         }}
       />
+
+      <CarryoverMatrix periods={periods} kinds={kinds} />
 
       <div className="grid md:grid-cols-2 xl:grid-cols-4 gap-4">
         {(Array.isArray(kinds) ? kinds : []).map((o) => (
@@ -344,6 +357,8 @@ function MonthStatusPanel({ periods, onSelect, reload, notify }) {
               </th>
               <th className="th">会计期间</th>
               <th className="th">结账状态</th>
+              <th className="th">结转状态</th>
+              <th className="th text-center">本期损益</th>
               <th className="th text-right">凭证数</th>
               <th className="th text-right">其中导入</th>
               <th className="th text-right">借方合计</th>
@@ -373,6 +388,23 @@ function MonthStatusPanel({ periods, onSelect, reload, notify }) {
                     {r.status === "closed" ? "已结账" : "未结账"}
                   </Badge>
                 </td>
+                <td className="td" title={(r.carryover?.kind_names || []).join("、") || "尚未执行结转"}>
+                  {r.carryover?.count ? (
+                    <span className="inline-flex items-center gap-1.5">
+                      <Badge color="green">已结转 {r.carryover.count} 项</Badge>
+                      <span className="text-xs text-slate-400 max-w-[160px] truncate">
+                        {(r.carryover.kind_names || []).join("、")}
+                      </span>
+                    </span>
+                  ) : (
+                    <Badge color="slate">未结转</Badge>
+                  )}
+                </td>
+                <td className="td text-center">
+                  <Badge color={r.carryover?.profit_closed ? "green" : "amber"}>
+                    {r.carryover?.profit_closed ? "已结平" : "未结平"}
+                  </Badge>
+                </td>
                 <td className="td-num">{r.voucher_count || 0}</td>
                 <td className="td-num">{r.import_count || 0}</td>
                 <td className="td-num"><Amt v={r.total_debit} /></td>
@@ -382,6 +414,90 @@ function MonthStatusPanel({ periods, onSelect, reload, notify }) {
                 <td className="td text-xs text-slate-500 max-w-xs truncate">{r.note}</td>
               </tr>
             ))}
+          </tbody>
+        </table>
+        {!rows.length && <Empty text="暂无月份数据（导入或录入凭证后自动出现）" />}
+      </div>
+    </div>
+  );
+}
+
+/* ---------- 每月结转状态（结转步骤 × 月份矩阵） ---------- */
+
+function CarryoverMatrix({ periods, kinds }) {
+  const rows = Array.isArray(periods) ? periods : [];
+  const steps = (Array.isArray(kinds) ? kinds : [])
+    .slice()
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  return (
+    <div className="card">
+      <div className="px-5 py-3.5 border-b border-slate-200">
+        <h2 className="font-semibold text-slate-800">每月结转状态</h2>
+        <div className="text-xs text-slate-400 mt-0.5">
+          每月已执行的结转步骤一目了然；✓ 为本系统结转，蓝色 ✓ 为导入凭证识别的结转；未结转的月份可在此发现遗漏
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full">
+          <thead>
+            <tr>
+              <th className="th">会计期间</th>
+              <th className="th text-right">已结转</th>
+              {steps.map((s) => (
+                <th key={s.kind} className="th text-center whitespace-nowrap" title={s.name}>
+                  <span className={s.enabled ? "" : "text-slate-300 line-through"}>
+                    {SHORT_KINDS[s.kind] || s.name}
+                  </span>
+                </th>
+              ))}
+              <th className="th text-center">本期损益</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const c = r.carryover || {};
+              const recMap = {};
+              (c.records || []).forEach((x) => {
+                if (x.status === "active") recMap[x.kind] = x;
+              });
+              return (
+                <tr key={r.period} className="hover:bg-slate-50">
+                  <td className="td font-medium">{r.period}</td>
+                  <td className="td-num" title={c.kind_names ? c.kind_names.join("、") : ""}>
+                    {c.count ? `${c.count} 项` : "—"}
+                  </td>
+                  {steps.map((s) => {
+                    const rec = recMap[s.kind];
+                    return (
+                      <td
+                        key={s.kind}
+                        className="td text-center"
+                        title={
+                          rec
+                            ? `${s.name}：${fmtMoney(rec.amount)}` +
+                              `（凭证 ${rec.voucher_no || rec.source_no || "-"}` +
+                              `${rec.source === "import" ? "，导入识别" : ""}）`
+                            : `${r.period} 未执行【${s.name}】`
+                        }
+                      >
+                        {rec ? (
+                          <span className={rec.source === "import" ? "text-sky-600" : "text-emerald-600"}>
+                            ✓
+                          </span>
+                        ) : (
+                          <span className="text-slate-300">·</span>
+                        )}
+                      </td>
+                    );
+                  })}
+                  <td className="td text-center">
+                    <Badge color={c.profit_closed ? "green" : "amber"}>
+                      {c.profit_closed ? "已结平" : "未结平"}
+                    </Badge>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
         {!rows.length && <Empty text="暂无月份数据（导入或录入凭证后自动出现）" />}

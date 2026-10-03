@@ -184,10 +184,11 @@ def export_detail_ledger(db: Session, account_code: str = None,
         if not entries and abs(od - oc) < 0.005 and not account_code:
             continue  # 全量导出时跳过无发生额且无期初的科目
         anchor = L.opening_anchor_year(db, from_period)
+        odn, ocn = L.net_side(od, oc)  # 期初按余额口径单边列示
         net = r2f(od - oc)
         seq += 1
         out_rows.append([seq, a.code, a.name, f"{anchor}-01", "期初余额", "",
-                         od or None, oc or None, _dir_of(net), abs(net) or None])
+                         odn or None, ocn or None, _dir_of(net), abs(net) or None])
         for e, v in entries:
             net = r2f(net + (e.debit or 0) - (e.credit or 0))
             seq += 1
@@ -367,9 +368,12 @@ def import_detail_ledger(db: Session, data: bytes, opening_year: str = None) -> 
                 errors.append(f"第{i + 1}行：期初行无法确定年份（请填日期如 2021-01 或指定期初年份）")
                 continue
             if debit and credit:
-                errors.append(f"第{i + 1}行：期初借贷不能同时有值")
-                continue
-            if debit or credit:
+                # 借贷同时有值：按净额处理（其它平台可能导出累计发生额口径的期初）
+                net_amt = L.r2(debit - credit)
+                amount, side = (net_amt, "D") if net_amt >= 0 else (-net_amt, "C")
+                warnings.append(
+                    f"第{i + 1}行：期初借贷同时有值，已按净额 {net_amt:.2f} 处理")
+            elif debit or credit:
                 amount, side = (debit, "D") if debit else (credit, "C")
             elif balance and direction in ("借", "贷"):
                 amount, side = balance, ("D" if direction == "借" else "C")
@@ -522,6 +526,9 @@ def import_detail_ledger(db: Session, data: bytes, opening_year: str = None) -> 
         raise ValueError("导入失败：文件中没有可识别的明细账数据行")
     if errors and created_vouchers == 0 and merged_vouchers == 0 and opening_rows == 0:
         raise ValueError("导入失败：" + "；".join(errors[:10]))
+    # 识别结转类凭证并登记结转（与凭证导入同口径）；可重复执行（幂等）
+    from . import carryover as C
+    sweep = C.sweep_carryover(db)
     if abs(total_od - total_oc) >= 0.005 and opening_rows:
         warnings.append(
             f"期初试算不平衡：借方 {total_od:.2f} ≠ 贷方 {total_oc:.2f}（可能只导入了部分科目）")
@@ -545,6 +552,8 @@ def import_detail_ledger(db: Session, data: bytes, opening_year: str = None) -> 
         "opening_balanced": abs(total_od - total_oc) < 0.005,
         "created_accounts": created_accounts,
         "red_rows": red_rows,
+        "carryover_marked": sweep["marked"],
+        "carryover_records": sweep["records"],
         "errors": errors,
         "warnings": warnings,
     }

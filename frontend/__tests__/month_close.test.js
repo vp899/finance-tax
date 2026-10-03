@@ -2,7 +2,7 @@
  * 月份结账状态 / 批量结账 / 同步月份数据 / 选中月份同步（mock 后端接口）
  */
 import React from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import CarryoverPage from "@/app/carryover/page";
 import { PeriodRange } from "@/components/ui";
 import { curPeriod, defaultRange, realPeriod, setSelMonth } from "@/lib/api";
@@ -34,6 +34,10 @@ function mockRoutes(routes, calls) {
   });
 }
 
+// 页面含多张月份表格（月份结账状态 + 每月结转状态矩阵），查询时限定到目标表格
+const monthPanel = () => screen.getByText("月份结账状态").closest(".card");
+const monthCell = (period) => within(monthPanel()).findByText(period);
+
 beforeEach(() => {
   window.localStorage.clear();
   window.confirm = jest.fn(() => true);
@@ -53,11 +57,11 @@ describe("月份结账状态列表", () => {
     });
     render(<CarryoverPage />);
     await waitFor(() => expect(screen.getByText("月份结账状态")).toBeInTheDocument());
-    expect(await screen.findByText("2021-06")).toBeInTheDocument();
+    expect(await monthCell("2021-06")).toBeInTheDocument();
     expect(screen.getByText("已结账")).toBeInTheDocument();
     expect(screen.getByText("未结账")).toBeInTheDocument();
-    expect(screen.getByText("会计期间")).toBeInTheDocument();
-    expect(screen.getByText("其中导入")).toBeInTheDocument();
+    expect(within(monthPanel()).getByText("会计期间")).toBeInTheDocument();
+    expect(within(monthPanel()).getByText("其中导入")).toBeInTheDocument();
   });
 
   test("点击月份行选中月份并同步该月数据", async () => {
@@ -67,7 +71,7 @@ describe("月份结账状态列表", () => {
       "/api/carryover/kinds": [],
     });
     render(<CarryoverPage />);
-    fireEvent.click(await screen.findByText("2021-05"));
+    fireEvent.click(await monthCell("2021-05"));
     await waitFor(() => expect(curPeriod()).toBe("2021-05"));
     // 页面月份输入与结转记录的区间选择器都同步到选中月份
     expect(screen.getAllByDisplayValue("2021-05").length).toBeGreaterThan(0);
@@ -83,7 +87,7 @@ describe("月份结账状态列表", () => {
       "/api/carryover/close-batch": { results: [{ period: "2021-05", ok: true, status: "closed" }], closed: 1, failed: 0 },
     }, calls);
     render(<CarryoverPage />);
-    const row = (await screen.findByText("2021-05")).closest("tr");
+    const row = (await monthCell("2021-05")).closest("tr");
     fireEvent.click(row.querySelector('input[type="checkbox"]'));
     fireEvent.click(screen.getByText("批量结账"));
     await waitFor(() => {
@@ -107,7 +111,7 @@ describe("月份结账状态列表", () => {
       "/api/carryover/open-batch": { results: [], opened: 1, failed: 0 },
     }, calls);
     render(<CarryoverPage />);
-    const row = (await screen.findByText("2021-06")).closest("tr");
+    const row = (await monthCell("2021-06")).closest("tr");
     fireEvent.click(row.querySelector('input[type="checkbox"]'));
     fireEvent.click(screen.getByText("批量反结账"));
     await waitFor(() => {
@@ -129,7 +133,7 @@ describe("月份结账状态列表", () => {
       "/api/carryover/periods/sync": { synced: ["2021-05", "2021-06"], created: [], periods: PERIODS },
     }, calls);
     render(<CarryoverPage />);
-    const row = (await screen.findByText("2021-05")).closest("tr");
+    const row = (await monthCell("2021-05")).closest("tr");
     fireEvent.click(row.querySelector('input[type="checkbox"]'));
     fireEvent.click(screen.getByText("同步月份数据"));
     await waitFor(() => {
@@ -181,5 +185,83 @@ describe("选中月份同步", () => {
     setSelMonth("2021-06");
     setSelMonth("");
     expect(curPeriod()).toBe(realPeriod());
+  });
+});
+
+describe("每月结转状态", () => {
+  const KINDS = [
+    { kind: "sales_cost", name: "结转销售成本", order: 10, enabled: true },
+    { kind: "profit", name: "结转本期损益", order: 170, enabled: true },
+    { kind: "retain_profit", name: "结转未分配利润", order: 180, enabled: true },
+  ];
+  const PERIODS_WITH_CARRY = [
+    {
+      period: "2021-06", status: "closed", closed_at: "2021-07-01 10:00:00", note: "",
+      voucher_count: 5, import_count: 5, manual_count: 0,
+      draft_count: 0, void_count: 0, total_debit: 100, total_credit: 100,
+      carryover: {
+        count: 2, amount: 700, kinds: ["sales_cost", "profit"],
+        kind_names: ["结转销售成本", "结转本期损益"], profit_closed: true,
+        records: [
+          { id: 1, kind: "sales_cost", kind_name: "结转销售成本", amount: 200,
+            status: "active", voucher_no: "记-202106-003", source_no: "转-1", source: "import" },
+          { id: 2, kind: "profit", kind_name: "结转本期损益", amount: 500,
+            status: "active", voucher_no: "记-202106-004", source_no: "转-2", source: "import" },
+        ],
+      },
+    },
+    {
+      period: "2021-05", status: "open", closed_at: "", note: "",
+      voucher_count: 3, import_count: 3, manual_count: 0,
+      draft_count: 0, void_count: 0, total_debit: 90, total_credit: 90,
+      carryover: {
+        count: 0, amount: 0, kinds: [], kind_names: [], profit_closed: false, records: [],
+      },
+    },
+  ];
+
+  test("月份列表显示结转状态与损益结平", async () => {
+    mockRoutes({
+      "/api/carryover/records": [],
+      "/api/carryover/periods": PERIODS_WITH_CARRY,
+      "/api/carryover/kinds": KINDS,
+    });
+    render(<CarryoverPage />);
+    expect(await screen.findByText("已结转 2 项")).toBeInTheDocument();
+    expect(screen.getByText("未结转")).toBeInTheDocument();
+    expect(screen.getAllByText("已结平").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("未结平").length).toBeGreaterThan(0);
+  });
+
+  test("矩阵按月展示已执行的结转步骤", async () => {
+    mockRoutes({
+      "/api/carryover/records": [],
+      "/api/carryover/periods": PERIODS_WITH_CARRY,
+      "/api/carryover/kinds": KINDS,
+    });
+    render(<CarryoverPage />);
+    await screen.findByText("已结转 2 项"); // 等待月份数据渲染
+    const matrix = () => within(screen.getByText("每月结转状态").closest(".card"));
+    // 表头为结转步骤简称
+    expect(matrix().getAllByText("销售成本").length).toBeGreaterThan(0);
+    expect(matrix().getAllByText("结转损益").length).toBeGreaterThan(0);
+    // 2021-06 两步已结转，其余格为未执行标记
+    expect(matrix().getAllByText("✓").length).toBe(2);
+    expect(matrix().getAllByText("·").length).toBe(4);
+    // 单元格提示含凭证号与导入来源
+    expect(matrix().getAllByTitle(/导入识别/).length).toBe(2);
+  });
+
+  test("矩阵支持停用步骤的展示", async () => {
+    mockRoutes({
+      "/api/carryover/records": [],
+      "/api/carryover/periods": PERIODS_WITH_CARRY,
+      "/api/carryover/kinds": KINDS.map((k) =>
+        k.kind === "retain_profit" ? { ...k, enabled: false } : k),
+    });
+    render(<CarryoverPage />);
+    await screen.findByText("已结转 2 项"); // 等待月份数据渲染
+    expect(screen.getByText("每月结转状态")).toBeInTheDocument();
+    expect(screen.getAllByText("未分配利润").length).toBeGreaterThan(0);
   });
 });

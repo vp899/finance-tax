@@ -118,6 +118,12 @@ def opening_anchor_year(db: Session, before_period: str) -> str:
     return row[0] if row else year
 
 
+def net_side(od: float, oc: float):
+    """借/贷毛额 → 单边余额（余额表期初/期末口径：余额只列在余额方向一侧）"""
+    net = r2((od or 0) - (oc or 0))
+    return (net, 0.0) if net >= 0 else (0.0, -net)
+
+
 def opening_sums(db: Session, ids, before_period: str):
     """before_period 之前的期初 + 发生额（跨年锚定到最近有期初的年度）"""
     anchor = opening_anchor_year(db, before_period)
@@ -145,8 +151,10 @@ def balance_block(db: Session, ids, period=None, from_period=None, to_period=Non
         pd, pc = _entry_sums(db, ids, period=period)
     net = r2((od + pd) - (oc + pc))
     cd, cc = (net, 0.0) if net >= 0 else (0.0, -net)
+    # 期初按余额口径列示（单边），避免把区间前的借贷累计发生额当成期初余额
+    odn, ocn = net_side(od, oc)
     return {
-        "opening_debit": od, "opening_credit": oc,
+        "opening_debit": odn, "opening_credit": ocn,
         "period_debit": pd, "period_credit": pc,
         "closing_debit": cd, "closing_credit": cc,
     }
@@ -200,6 +208,7 @@ def detail_ledger(db: Session, code: str, from_period: str, to_period: str, roll
         return {"account": None, "opening": {"debit": 0, "credit": 0}, "rows": []}
     ids = account_ids_for(db, code, rollup=rollup)
     od, oc = opening_sums(db, ids, from_period)
+    odn, ocn = net_side(od, oc)
     acc_map = {a.id: a for a in db.query(Account).all()}
     rows = []
     net = r2(od - oc)
@@ -221,7 +230,7 @@ def detail_ledger(db: Session, code: str, from_period: str, to_period: str, roll
             "balance_credit": -net if net < 0 else 0.0,
         })
     return {"account": {"code": acc.code, "name": acc.name, "direction": acc.direction},
-            "opening": {"debit": od, "credit": oc}, "rows": rows}
+            "opening": {"debit": odn, "credit": ocn}, "rows": rows}
 
 
 def journal(db: Session, from_period: str, to_period: str):
@@ -306,6 +315,7 @@ def trial_balance(db: Session, period: str = None, from_period: str = None,
             scope.append(a)
 
     td = tc = 0.0
+    tod = toc = tpd = tpc = 0.0
     rows = []
     for a in scope:
         od, oc = opening_sums(db, [a.id], from_period)
@@ -314,14 +324,19 @@ def trial_balance(db: Session, period: str = None, from_period: str = None,
         d = net if net > 0 else 0.0
         c = -net if net < 0 else 0.0
         td, tc = r2(td + d), r2(tc + c)
+        odn, ocn = net_side(od, oc)
+        tod, toc = r2(tod + odn), r2(toc + ocn)
+        tpd, tpc = r2(tpd + pd), r2(tpc + pc)
         rows.append({
             "code": a.code, "name": a.name, "debit": d, "credit": c,
             "is_leaf": bool(a.is_leaf),
-            "opening_debit": od, "opening_credit": oc,
+            "opening_debit": odn, "opening_credit": ocn,
             "period_debit": pd, "period_credit": pc,
             "closing_debit": d, "closing_credit": c,
         })
     return {"rows": rows, "total_debit": td, "total_credit": tc,
+            "total_opening_debit": tod, "total_opening_credit": toc,
+            "total_period_debit": tpd, "total_period_credit": tpc,
             "balanced": abs(td - tc) < 0.005,
             "difference": r2(td - tc),
             "period": to_period, "from_period": from_period, "to_period": to_period}

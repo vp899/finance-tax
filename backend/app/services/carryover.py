@@ -1018,6 +1018,122 @@ def reverse(db: Session, record_id: int):
             "kind": KIND_NAMES.get(rec.kind, rec.kind)}
 
 
+# ---------- 导入结转识别（其它平台凭证导入后自动登记结转） ----------
+
+import re as _re
+
+# 摘要关键词（正则）→ 结转类型；按顺序匹配，命中即停。
+# 仅用于导入凭证，避免手工业务凭证被误判。
+CARRYOVER_PATTERNS = [
+    ("exchange", [r"(结转|计提|重估).*汇兑", r"汇兑.*结转"]),
+    ("retain_profit", [r"结转.*(未分配利润|本年利润|利润分配)",
+                       r"(未分配利润|本年利润).*结转"]),
+    ("profit", [r"结转.*(本期)?损益", r"(本期)?损益.*结转"]),
+    ("sales_cost", [r"结转.*(销售成本|主营业务成本|商品成本|销售成本结转)"]),
+    ("pay_bonus", [r"发放.*(全年一次性奖金|年终奖|奖金)"]),
+    ("accrue_bonus", [r"计提.*(全年一次性奖金|年终奖|奖金)"]),
+    ("pay_salary", [r"发放.*(工资|薪酬)"]),
+    ("salary", [r"计提.*(工资|薪酬)"]),
+    ("pay_labor", [r"发放.*(劳务报酬|劳务费)"]),
+    ("accrue_labor", [r"计提.*(劳务报酬|劳务费)"]),
+    ("depreciation", [r"计提.*折旧"]),
+    ("amortize_deferred", [r"(摊销|计提).*待摊"]),
+    ("amortization", [r"(摊销|计提).*(无形资产|摊销费)"]),
+    ("vat_free", [r"(免交|免征|减免).*增值税"]),
+    ("income_tax", [r"计提.*(企业所得税|所得税)"]),
+    ("tax", [r"计提.*(税金|税金及附加|附加税)"]),
+    ("water_fund", [r"(计提|结转).*(水利|水利建设基金)"]),
+    ("stamp_tax", [r"计提.*印花税"]),
+    ("union_fee", [r"计提.*工会经费"]),
+]
+_CARRYOVER_RE = [(k, [_re.compile(p) for p in pats]) for k, pats in CARRYOVER_PATTERNS]
+
+PROFIT_ACCOUNT_NAMES = ("本年利润",)
+RETAIN_ACCOUNT_NAMES = ("利润分配", "未分配利润")
+
+
+def _carryover_id_sets(db: Session):
+    """(损益类科目, 本年利润类科目, 利润分配类科目) 的 id 集合"""
+    cfg = get_config(db)
+    profit_code = (cfg["steps"]["profit"]["accounts"].get("profit") or "3103").strip()
+    retain_code = (cfg["steps"]["retain_profit"]["accounts"].get("retained") or "3104").strip()
+    pl_ids, profit_ids, retain_ids = set(), set(), set()
+    for a in db.query(Account).all():
+        if a.category in ("income", "expense"):
+            pl_ids.add(a.id)
+        name = (a.name or "").strip()
+        if a.code.startswith(profit_code) or a.code.startswith("3103") or name in PROFIT_ACCOUNT_NAMES:
+            profit_ids.add(a.id)
+        if (a.code.startswith(retain_code) or a.code.startswith("3104")
+                or name in RETAIN_ACCOUNT_NAMES or name.startswith("利润分配")):
+            retain_ids.add(a.id)
+    return pl_ids, profit_ids, retain_ids
+
+
+def detect_carryover_kind(entry_account_ids, pl_ids, profit_ids, retain_ids) -> str:
+    """按分录科目结构识别结转类型（最可靠）：
+
+    - 损益类科目 ↔ 本年利润且无其它科目 → profit（结转本期损益）
+    - 本年利润 ↔ 利润分配 且无其它科目 → retain_profit（结转未分配利润）
+    """
+    aids = set(entry_account_ids or [])
+    if not aids:
+        return ""
+    others = aids - pl_ids - profit_ids - retain_ids
+    if not others and (aids & pl_ids) and (aids & profit_ids):
+        return "profit"
+    if not others and (aids & profit_ids) and (aids & retain_ids) and not (aids & pl_ids):
+        return "retain_profit"
+    return ""
+
+
+def detect_carryover_kind_by_summary(summaries: list) -> str:
+    """按摘要关键词识别结转类型（仅用于导入凭证）"""
+    text = "；".join(s for s in (summaries or []) if s)
+    if not text:
+        return ""
+    for kind, regs in _CARRYOVER_RE:
+        if any(r.search(text) for r in regs):
+            return kind
+    return ""
+
+
+def sweep_carryover(db: Session) -> dict:
+    """为未标记的凭证识别结转类型并登记结转记录（导入后调用；幂等，可重复执行）。
+
+    - 结构识别（结转本期损益 / 结转未分配利润）对全部未标记的正式凭证生效：
+      利润表/所得税计提/结账检查依赖该标记，否则结转损益凭证会被重复计入损益。
+    - 摘要关键词识别仅对导入（source=import）的凭证生效，避免手工业务凭证被误判。
+    - 已有结转记录的凭证不重复登记。
+    """
+    pl_ids, profit_ids, retain_ids = _carryover_id_sets(db)
+    marked, records, kinds = 0, 0, {}
+    existing_rec = {r.voucher_id for r in db.query(CarryoverRecord).all()}
+    vouchers = (db.query(Voucher)
+                .filter(Voucher.status == "posted", Voucher.carryover_kind.is_(None))
+                .order_by(Voucher.date, Voucher.id).all())
+    for v in vouchers:
+        aids = [e.account_id for e in v.entries]
+        summaries = [e.summary for e in v.entries] + ([v.remark] if v.remark else [])
+        kind = detect_carryover_kind(aids, pl_ids, profit_ids, retain_ids)
+        if not kind and v.source == "import":
+            kind = detect_carryover_kind_by_summary(summaries)
+        if not kind:
+            continue
+        v.carryover_kind = kind
+        marked += 1
+        kinds[kind] = kinds.get(kind, 0) + 1
+        if v.id not in existing_rec:
+            db.add(CarryoverRecord(
+                kind=kind, period=v.period, voucher_id=v.id,
+                amount=L.r2(sum(e.debit for e in v.entries)),
+                created_at=V.now_str(), note=f"导入识别：{KIND_NAMES.get(kind, kind)}"))
+            existing_rec.add(v.id)
+            records += 1
+    db.flush()
+    return {"marked": marked, "records": records, "kinds": kinds}
+
+
 # ---------- 结账 / 反结账 ----------
 
 def close_period(db: Session, period: str, force: bool = False,
@@ -1101,6 +1217,63 @@ def open_batch(db: Session, periods: list):
 
 # ---------- 月份数据 / 结账状态 ----------
 
+def carryover_status_by_period(db: Session) -> dict:
+    """按会计期间汇总结转状态：已执行的结转步骤（含导入识别的结转）/金额/凭证"""
+    out = {}
+
+    def slot(period):
+        return out.setdefault(period, {
+            "count": 0, "amount": 0.0, "kinds": [], "kind_names": [],
+            "profit_closed": False, "records": [],
+        })
+
+    for r in db.query(CarryoverRecord).order_by(
+            CarryoverRecord.period, CarryoverRecord.id).all():
+        v = db.query(Voucher).get(r.voucher_id)
+        s = slot(r.period)
+        rec = {
+            "id": r.id, "kind": r.kind, "kind_name": KIND_NAMES.get(r.kind, r.kind),
+            "amount": L.r2(r.amount or 0), "status": r.status,
+            "voucher_id": r.voucher_id, "voucher_no": v.voucher_no if v else "",
+            "source_no": (v.source_no if v else "") or "",
+            "source": v.source if v else "", "created_at": r.created_at or "",
+            "note": r.note or "",
+        }
+        s["records"].append(rec)
+        if r.status == "active":
+            s["count"] += 1
+            s["amount"] = L.r2(s["amount"] + rec["amount"])
+            if r.kind not in s["kinds"]:
+                s["kinds"].append(r.kind)
+                s["kind_names"].append(rec["kind_name"])
+    return out
+
+
+def _pl_net_by_period(db: Session) -> dict:
+    """各期间损益净额（贷方为正）：Σ(贷-借) 全部损益类科目发生额"""
+    from sqlalchemy import func
+    rows = db.query(
+        Voucher.period,
+        func.coalesce(func.sum(VoucherEntry.credit), 0.0),
+        func.coalesce(func.sum(VoucherEntry.debit), 0.0),
+    ).join(Voucher, Voucher.id == VoucherEntry.voucher_id
+    ).join(Account, Account.id == VoucherEntry.account_id
+    ).filter(Voucher.status == "posted",
+             Account.category.in_(("income", "expense"))
+    ).group_by(Voucher.period).all()
+    return {period: L.r2(c - d) for period, c, d in rows}
+
+
+def monthly_status(db: Session) -> dict:
+    """每月结转状态：全部结转步骤 × 各会计期间（含导入识别的结转记录）"""
+    cfg = get_config(db)
+    steps = []
+    for kind, name, order, desc, _mode, _man in sorted(STEPS, key=lambda s: (s[2], s[0])):
+        sc = cfg["steps"].get(kind) or {}
+        steps.append({"kind": kind, "name": name, "order": order, "desc": desc,
+                      "enabled": bool(sc.get("enabled", True))})
+    return {"kinds": steps, "months": list_periods(db)}
+
 def month_stats(db: Session) -> dict:
     """按会计期间统计月份数据：凭证张数/借贷合计/草稿/导入/作废"""
     from sqlalchemy import func, case
@@ -1139,8 +1312,14 @@ def month_stats(db: Session) -> dict:
 
 
 def list_periods(db: Session) -> list:
-    """月份结账状态列表：全部会计期间 + 有凭证数据的月份（按期间倒序）"""
+    """月份结账状态列表：全部会计期间 + 有凭证数据的月份（按期间倒序）
+
+    每月附带 carryover 结转状态：已执行结转步骤/金额/凭证（含导入识别的结转），
+    以及本期损益是否已结平。
+    """
     stats = month_stats(db)
+    carry = carryover_status_by_period(db)
+    pl_net = _pl_net_by_period(db)
     rows = {p.period: {"period": p.period, "status": p.status,
                        "closed_at": p.closed_at or "", "note": p.note or ""}
             for p in db.query(Period).all()}
@@ -1155,6 +1334,13 @@ def list_periods(db: Session) -> list:
             "draft_count": 0, "void_count": 0,
             "total_debit": 0.0, "total_credit": 0.0,
         }))
+        c = dict(carry.get(period) or {
+            "count": 0, "amount": 0.0, "kinds": [], "kind_names": [],
+            "profit_closed": False, "records": [],
+        })
+        c["profit_closed"] = abs(pl_net.get(period, 0.0)) < 0.005
+        c["pl_net"] = pl_net.get(period, 0.0)
+        r["carryover"] = c
         out.append(r)
     return out
 
